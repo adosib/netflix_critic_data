@@ -204,7 +204,7 @@ async def main():
     ) as dbconn:
         with dbconn.cursor() as dbcur:
             dbcur.execute("""
-                SELECT count(*)
+                SELECT DISTINCT titles.netflix_id
                 FROM titles
                 LEFT JOIN (
                     SELECT availability.netflix_id, MAX(availability.checked_at) AS last_checked
