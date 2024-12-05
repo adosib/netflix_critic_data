@@ -17,15 +17,14 @@ from aiolimiter import AsyncLimiter
 
 THIS_DIR = Path(__file__).parent
 ROOT_DIR, *_ = [
-    parent for parent in THIS_DIR.parents if parent.stem == "netflix_critic"
+    parent for parent in THIS_DIR.parents if parent.stem == "netflix_critic_data"
 ]
 TITLEPAGE_SAVETO_DIR = ROOT_DIR / "data" / "raw" / "title"
 WATCHPAGE_SAVETO_DIR = ROOT_DIR / "data" / "raw" / "watch"
 LOG_DIR = ROOT_DIR / "logs"
 
-SCRAPEOPS_API_KEY = os.getenv("SCRAPEOPS_API_KEY")
-
-COOKIES = os.getenv("NETFLIX_HEADER")
+SCRAPEOPS_API_KEY = os.environ["SCRAPEOPS_API_KEY"]
+COOKIES = os.environ["NETFLIX_HEADER"]
 HEADERS = {"Cookie": COOKIES}
 
 log_file = LOG_DIR / f'{datetime.now().strftime('%Y%m%d%H%M%S')}.log'
@@ -161,9 +160,7 @@ async def run(netflix_id, session, limiter, dbconn, dbcur):
         try:
             # TODO try getting away with the default headers to see if fake headers are necessary
             headers = await pick_session_headers()
-            responses = await get_netflix(
-                session, limiter, headers, request_url, netflix_id
-            )
+            responses = await get_netflix(session, limiter, headers, request_url)
             break
         except aiohttp.client_exceptions.NonHttpUrlRedirectClientError as err:
             logging.exception(err)
@@ -207,12 +204,16 @@ async def main():
     ) as dbconn:
         with dbconn.cursor() as dbcur:
             dbcur.execute("""
-                SELECT DISTINCT titles.netflix_id
+                SELECT count(*)
                 FROM titles
-                LEFT JOIN availability 
-                    ON availability.netflix_id = titles.netflix_id
-                WHERE availability.id IS NULL 
-                   OR availability.checked_at + interval '7 days' < current_date;
+                LEFT JOIN (
+                    SELECT availability.netflix_id, MAX(availability.checked_at) AS last_checked
+                    FROM availability
+                    GROUP BY availability.netflix_id
+                ) AS avail 
+                    ON avail.netflix_id = titles.netflix_id
+                WHERE avail.netflix_id IS NULL 
+                   OR avail.last_checked + INTERVAL '7 days' < current_date;
             """)
             concurrency_limit = 5
             connector = aiohttp.TCPConnector(
