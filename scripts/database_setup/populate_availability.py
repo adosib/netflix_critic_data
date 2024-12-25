@@ -55,10 +55,62 @@ logging.basicConfig(
 
 @dataclass
 class NetflixResponse:
-    url: str
+    netflix_id: int
+    orig_url: str
     response: aiohttp.ClientResponse
     response_body: str
     available: bool
+
+    @property
+    def redirected_netflix_id(self) -> int:
+        url = self.response.url
+        if str(self.netflix_id) in url:
+            return None
+        return int(url.query.get("origId", url.name))
+
+    @property
+    def saveto_path(self) -> str:
+        saveto_dir = (
+            WATCHPAGE_SAVETO_DIR if "watch" in self.orig_url else TITLEPAGE_SAVETO_DIR
+        )
+        return str(saveto_dir / f"{self.netflix_id}.html")
+
+
+class SessionHandler:
+    def __init__(self):
+        concurrency_limit = 5
+        connector = aiohttp.TCPConnector(
+            limit=concurrency_limit, limit_per_host=concurrency_limit
+        )
+        # There's some weird timeout stuff that happens here
+        # which necessitated the need for the ClientTimeout instance:
+        # https://docs.aiohttp.org/en/stable/client_quickstart.html#aiohttp-client-timeouts
+        # https://stackoverflow.com/questions/64534844/python-asyncio-aiohttp-timeout
+        # https://github.com/aio-libs/aiohttp/issues/3203
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15)
+
+        # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
+        # but I'll be nice and limit to 5 r/s
+        self.limiter = AsyncLimiter(1, 1.0 / concurrency_limit)
+
+        self.noauth_session = aiohttp.ClientSession(
+            connector=connector, timeout=timeout
+        )
+        self.authenticated_session = aiohttp.ClientSession(
+            connector=connector, timeout=timeout, headers={**HEADERS, **COOKIE}
+        )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self):
+        self.noauth_session.close()
+        self.authenticated_session.close()
+
+    async def choose_session(self, urlpath) -> aiohttp.ClientSession:
+        if "title" in urlpath:
+            return self.noauth_session
+        return self.authenticated_session
 
 
 async def insert_into_database(cursor: psycopg.Cursor, record: dict):
@@ -120,11 +172,8 @@ async def pick_session_headers():
 
 
 async def get_netflix(
-    session: aiohttp.ClientSession,
-    request_url: str,
-    responses: list[NetflixResponse] = None,
-) -> list[NetflixResponse]:
-    responses = responses or []
+    netflix_id: int, request_url: str, session: aiohttp.ClientSession
+) -> NetflixResponse:
     async with session.get(request_url) as response:
         logging.info(f"Starting request for {request_url}")
         status = response.status
@@ -134,35 +183,32 @@ async def get_netflix(
         if status not in (200, 301, 302, 404):
             raise ValueError(f"Unexpected HTTP status for {request_url}: {status}")
 
-        responses.append(
-            NetflixResponse(
-                url=request_url,
-                response=response,
-                response_body=html,
-                available=available,
-            )
+        return NetflixResponse(
+            netflix_id=netflix_id,
+            orig_url=request_url,
+            response=response,
+            response_body=html,
+            available=available,
         )
-        if available and "title" in request_url:
+
+
+async def run(netflix_id: int, session_handler: SessionHandler, dbcur: psycopg.Cursor):
+    responses: list[NetflixResponse] = []
+    async with session_handler.limiter:
+        for urlpath in ["title", "watch"]:
             # Sometimes we can access /title even if it's not available, so to be doubly sure,
-            # try to access /watch
-            await get_netflix(
-                authenticated_session,
-                request_url.replace("title", "watch"),
-                responses,
-            )
-
-        return responses
-
-
-async def run(netflix_id, session, limiter, dbcur):
-    request_url = f"https://www.netflix.com/title/{netflix_id}"
-    async with limiter:
-        while True:
+            # try to access /watch, too
+            request_url = f"https://www.netflix.com/{urlpath}/{netflix_id}"
             try:
-                responses = await get_netflix(session, request_url)
-                break
+                session = await session_handler.choose_session(urlpath)
+                response = await get_netflix(netflix_id, request_url, session)
+                responses.append(response)
+                if not response.available:
+                    # If /title isn't available, neither will be /watch, so don't bother
+                    break
             except aiohttp.client_exceptions.NonHttpUrlRedirectClientError as err:
                 logging.exception(err)
+                raise
             except aiohttp.client_exceptions.ServerDisconnectedError as err:
                 logging.exception(err)
                 raise
@@ -171,23 +217,16 @@ async def run(netflix_id, session, limiter, dbcur):
 
     async with asyncio.TaskGroup() as tg:
         for response in responses:
-            html = response.response_body
-            available = response.available
-
-            if available:
-                saveto_dir = (
-                    TITLEPAGE_SAVETO_DIR
-                    if "title" in response.url
-                    else WATCHPAGE_SAVETO_DIR
+            if response.available:
+                tg.create_task(
+                    save_response_body(response.response_body, response.saveto_path)
                 )
-                filepath = saveto_dir / f"{netflix_id}.html"
-                tg.create_task(save_response_body(html, filepath))
 
         data = {
             "netflix_id": netflix_id,
-            "region_code": "MO",
+            "redirected_netflix_id": response.redirected_netflix_id,
             "country": "US",
-            "available": available,
+            "available": response.available,
             "checked_at": checked_at,
         }
 
@@ -203,45 +242,28 @@ async def main():
     ) as dbconn:
         with dbconn.cursor() as dbcur:
             dbcur.execute("""
-                SELECT 70050981
+                SELECT DISTINCT titles.netflix_id
+                FROM titles
+                LEFT JOIN (
+                    SELECT availability.netflix_id, MAX(availability.checked_at) AS last_checked
+                    FROM availability
+                    GROUP BY availability.netflix_id
+                ) AS avail 
+                    ON avail.netflix_id = titles.netflix_id
+                WHERE avail.netflix_id IS NULL 
+                   OR avail.last_checked + INTERVAL '7 days' < current_date;
             """)
-            concurrency_limit = 5
-            connector = aiohttp.TCPConnector(
-                limit=concurrency_limit, limit_per_host=concurrency_limit
-            )
-            # There's some weird timeout stuff that happens here
-            # which necessitated the need for the ClientTimeout instance:
-            # https://docs.aiohttp.org/en/stable/client_quickstart.html#aiohttp-client-timeouts
-            # https://stackoverflow.com/questions/64534844/python-asyncio-aiohttp-timeout
-            # https://github.com/aio-libs/aiohttp/issues/3203
-            timeout = aiohttp.ClientTimeout(total=None, sock_connect=15)
 
-            # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
-            # but I'll be nice and limit to 5 r/s
-            limiter = AsyncLimiter(1, 1.0 / concurrency_limit)
+            with SessionHandler() as session_handler:
+                for netflix_id, *_ in dbcur:
+                    task = asyncio.create_task(
+                        run(netflix_id, session_handler, dbcur),
+                        name=str(netflix_id),
+                    )
+                    background_tasks.add(task)
+                    task.add_done_callback(background_tasks.discard)
 
-            # TODO how can I avoid globals here? I'd like to use some kind of handler but as far as I figure
-            # it would still require global variables
-            global noauth_session
-            global authenticated_session
-
-            noauth_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-            authenticated_session = aiohttp.ClientSession(
-                connector=connector, timeout=timeout, headers={**HEADERS, **COOKIE}
-            )
-
-            for netflix_id, *_ in dbcur:
-                task = asyncio.create_task(
-                    run(netflix_id, noauth_session, limiter, dbcur),
-                    name=str(netflix_id),
-                )
-                background_tasks.add(task)
-                task.add_done_callback(background_tasks.discard)
-
-            responses.extend(await asyncio.gather(*background_tasks))
-
-            for session in [noauth_session, authenticated_session]:
-                await session.close()
+                responses.extend(await asyncio.gather(*background_tasks))
 
     return responses
 
