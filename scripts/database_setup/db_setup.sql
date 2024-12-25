@@ -13,7 +13,7 @@ runtime int
 create table availability(
 id SERIAL primary key,
 netflix_id bigint references titles(netflix_id),
-redirected_netflix_id bigint references titles(netflix_id),
+redirected_netflix_id bigint,
 country char(2),
 available boolean,
 checked_at timestamp
