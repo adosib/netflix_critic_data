@@ -1,9 +1,6 @@
 import os
 import asyncio
 import logging
-
-# from pyjsparser import parse
-from random import randint
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -22,6 +19,8 @@ ROOT_DIR, *_ = [
 TITLEPAGE_SAVETO_DIR = ROOT_DIR / "data" / "raw" / "title"
 WATCHPAGE_SAVETO_DIR = ROOT_DIR / "data" / "raw" / "watch"
 LOG_DIR = ROOT_DIR / "logs"
+
+COUNTRY_CODE = "US"
 
 COOKIE = {"Cookie": os.environ["NETFLIX_COOKIE"]}
 HEADERS = {
@@ -99,17 +98,17 @@ class SessionHandler:
             connector=connector, timeout=timeout, headers={**HEADERS, **COOKIE}
         )
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self):
-        self.noauth_session.close()
-        self.authenticated_session.close()
+    async def __aexit__(self, *args):
+        await self.noauth_session.close()
+        await self.authenticated_session.close()
 
     async def choose_session(self, urlpath) -> aiohttp.ClientSession:
-        if "title" in urlpath:
-            return self.noauth_session
-        return self.authenticated_session
+        if "watch" in urlpath:
+            return self.authenticated_session
+        return self.noauth_session
 
 
 async def insert_into_database(cursor: psycopg.Cursor, record: dict):
@@ -196,7 +195,7 @@ async def run(netflix_id: int, session_handler: SessionHandler, dbcur: psycopg.C
         data = {
             "netflix_id": netflix_id,
             "redirected_netflix_id": response.redirected_netflix_id,
-            "country": "US",
+            "country": COUNTRY_CODE,
             "available": response.available,
             "checked_at": checked_at,
         }
