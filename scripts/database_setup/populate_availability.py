@@ -224,7 +224,7 @@ async def main():
                    OR avail.last_checked + INTERVAL '7 days' < current_date;
             """)
 
-            with SessionHandler() as session_handler:
+            async with SessionHandler() as session_handler:
                 for netflix_id, *_ in dbcur:
                     task = asyncio.create_task(
                         run(netflix_id, session_handler, dbcur),
