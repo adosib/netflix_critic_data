@@ -64,7 +64,7 @@ class NetflixResponse:
     @property
     def redirected_netflix_id(self) -> int:
         url = self.response.url
-        if str(self.netflix_id) in url:
+        if str(self.netflix_id) in str(url):
             return None
         return int(url.query.get("origId", url.name))
 
