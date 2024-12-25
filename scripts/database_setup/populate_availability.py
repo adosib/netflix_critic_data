@@ -23,7 +23,6 @@ TITLEPAGE_SAVETO_DIR = ROOT_DIR / "data" / "raw" / "title"
 WATCHPAGE_SAVETO_DIR = ROOT_DIR / "data" / "raw" / "watch"
 LOG_DIR = ROOT_DIR / "logs"
 
-SCRAPEOPS_API_KEY = os.environ["SCRAPEOPS_API_KEY"]
 COOKIE = {"Cookie": os.environ["NETFLIX_COOKIE"]}
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -141,34 +140,6 @@ async def response_indicates_available_title(response: aiohttp.ClientResponse):
     ):
         return False
     return response.ok
-
-
-async def get_fake_session_headers(session):
-    global session_headers_bag
-    session_headers_bag = []
-
-    logging.warning("CALLING get_fake_session_headers()")
-
-    async with session.get(
-        "https://headers.scrapeops.io/v1/browser-headers",
-        params={"api_key": SCRAPEOPS_API_KEY, "num_results": "100"},
-    ) as response:
-        headers_json = await response.json()
-        for headers in headers_json["result"]:
-            # If you navigate with a mobile device, Netflix really insists you download their app :)
-            if "Mobile;" in headers["user-agent"]:
-                continue
-            # elif headers.get('sec-ch-ua-platform') == '"Android"':
-            #     continue # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Sec-CH-UA-Platform
-            elif (
-                headers.get("sec-ch-ua-mobile", "?0") == "?0"
-            ):  # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Sec-CH-UA-Mobile
-                session_headers_bag.append(headers)
-
-
-async def pick_session_headers():
-    random_index = randint(0, len(session_headers_bag) - 1)
-    return session_headers_bag[random_index]
 
 
 async def get_netflix(
