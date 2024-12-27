@@ -2,6 +2,7 @@
 target/
 dbt_packages/
 logs/
+node_modules/*
 # Ignore everything in data/
 data/*
 # Except of course the subfolder raw/
