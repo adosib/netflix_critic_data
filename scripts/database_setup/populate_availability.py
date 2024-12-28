@@ -227,12 +227,14 @@ async def main():
         with dbconn.cursor() as dbcur:
             dbcur.execute(
                 """
-                SELECT DISTINCT titles.netflix_id
+                SELECT titles.netflix_id
                 FROM titles
                 LEFT JOIN availability
                     ON availability.netflix_id = titles.netflix_id
+                    AND country = %(country)s
                 WHERE availability.netflix_id IS NULL 
-                   OR availability.checked_at + INTERVAL '7 days' < current_date;
+                   OR availability.checked_at + INTERVAL '7 days' < current_date
+                ;
                 """,
                 {"country": COUNTRY_CODE},
             )
