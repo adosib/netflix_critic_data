@@ -163,22 +163,28 @@ async def get_netflix(
 
 
 async def run(netflix_id: int, session_handler: SessionHandler, dbcur: psycopg.Cursor):
+    title_id = netflix_id
     responses: list[NetflixResponse] = []
     async with session_handler.limiter:
         for urlpath in ["title", "watch"]:  # <- order here really matters
             # Sometimes we can access /title even if it's not available, so to be doubly sure,
             # try to access /watch, too
-            request_url = f"https://www.netflix.com/{urlpath}/{netflix_id}"
+            request_url = f"https://www.netflix.com/{urlpath}/{title_id}"
             try:
                 session = await session_handler.choose_session(urlpath)
-                response = await get_netflix(netflix_id, request_url, session)
+                response = await get_netflix(title_id, request_url, session)
                 responses.append(response)
                 if not response.available:
                     # If /title isn't available, neither will be /watch, so don't bother
                     break
+                elif response.redirected_netflix_id:
+                    # If /title redirects us, we'll want to use that redirected ID for /watch
+                    title_id = response.redirected_netflix_id
+
             except aiohttp.client_exceptions.NonHttpUrlRedirectClientError as err:
                 logging.exception(err)
                 raise
+
             except aiohttp.client_exceptions.ServerDisconnectedError as err:
                 logging.exception(err)
                 raise
@@ -225,10 +231,9 @@ async def main():
                 FROM titles
                 LEFT JOIN availability
                     ON availability.netflix_id = titles.netflix_id
-                    AND country = %(country)s
                 WHERE availability.netflix_id IS NULL 
                    OR availability.checked_at + INTERVAL '7 days' < current_date;
-            """,
+                """,
                 {"country": COUNTRY_CODE},
             )
 
