@@ -111,15 +111,15 @@ class SessionHandler:
         return self.noauth_session
 
 
-async def insert_into_database(cursor: psycopg.Cursor, record: dict):
-    insert_query = sql.SQL(
-        "INSERT INTO availability ({fields}) VALUES ({values})"
-    ).format(
-        fields=sql.SQL(", ").join(map(sql.Identifier, record.keys())),
-        values=sql.SQL(", ").join((record.values())),
+async def update_database(cursor: psycopg.Cursor, record: dict):
+    upsert_availability_query = sql.SQL(
+        "INSERT INTO availability (netflix_id, redirected_netflix_id, country, available, titlepage_reachable, checked_at) "
+        "VALUES (%(netflix_id)s, %(redirected_netflix_id)s, %(country)s, %(available)s, %(titlepage_reachable)s, %(checked_at)s) "
+        "ON CONFLICT (netflix_id, country) DO UPDATE "
+        "SET redirected_netflix_id = EXCLUDED.redirected_netflix_id, available = EXCLUDED.available, titlepage_reachable = EXCLUDED.titlepage_reachable, checked_at = EXCLUDED.checked_at"
     )
-    logging.info(f"Now executing: {insert_query.as_string()}")
-    cursor.execute(insert_query)
+    logging.info(f"Now executing: {upsert_availability_query.as_string()}")
+    cursor.execute(upsert_availability_query, record)
 
 
 async def save_response_body(response_body: str, filepath: Path):
@@ -165,7 +165,7 @@ async def get_netflix(
 async def run(netflix_id: int, session_handler: SessionHandler, dbcur: psycopg.Cursor):
     responses: list[NetflixResponse] = []
     async with session_handler.limiter:
-        for urlpath in ["title", "watch"]:
+        for urlpath in ["title", "watch"]:  # <- order here really matters
             # Sometimes we can access /title even if it's not available, so to be doubly sure,
             # try to access /watch, too
             request_url = f"https://www.netflix.com/{urlpath}/{netflix_id}"
@@ -186,21 +186,29 @@ async def run(netflix_id: int, session_handler: SessionHandler, dbcur: psycopg.C
     checked_at = datetime.now(timezone.utc)
 
     async with asyncio.TaskGroup() as tg:
+        titlepage_reachable = False
+        redirected_netflix_id = None
+
         for response in responses:
             if response.available:
+                titlepage_reachable = True
                 tg.create_task(
                     save_response_body(response.response_body, response.saveto_path)
                 )
 
+            if response.redirected_netflix_id:
+                redirected_netflix_id = response.redirected_netflix_id
+
         data = {
             "netflix_id": netflix_id,
-            "redirected_netflix_id": response.redirected_netflix_id,
+            "redirected_netflix_id": redirected_netflix_id,
             "country": COUNTRY_CODE,
-            "available": response.available,
+            "available": response.available,  # will always be whether or not /watch is available
+            "titlepage_reachable": titlepage_reachable,
             "checked_at": checked_at,
         }
 
-        tg.create_task(insert_into_database(dbcur, data))
+        tg.create_task(update_database(dbcur, data))
 
 
 async def main():
@@ -211,18 +219,18 @@ async def main():
         "dbname=postgres user=postgres", autocommit=True
     ) as dbconn:
         with dbconn.cursor() as dbcur:
-            dbcur.execute("""
+            dbcur.execute(
+                """
                 SELECT DISTINCT titles.netflix_id
                 FROM titles
-                LEFT JOIN (
-                    SELECT availability.netflix_id, MAX(availability.checked_at) AS last_checked
-                    FROM availability
-                    GROUP BY availability.netflix_id
-                ) AS avail 
-                    ON avail.netflix_id = titles.netflix_id
-                WHERE avail.netflix_id IS NULL 
-                   OR avail.last_checked + INTERVAL '7 days' < current_date;
-            """)
+                LEFT JOIN availability
+                    ON availability.netflix_id = titles.netflix_id
+                    AND country = %(country)s
+                WHERE availability.netflix_id IS NULL 
+                   OR availability.checked_at + INTERVAL '7 days' < current_date;
+            """,
+                {"country": COUNTRY_CODE},
+            )
 
             async with SessionHandler() as session_handler:
                 for netflix_id, *_ in dbcur:
