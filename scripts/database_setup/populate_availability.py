@@ -10,6 +10,12 @@ import psycopg
 import aiofiles
 from bs4 import BeautifulSoup
 from psycopg import sql
+from tenacity import (
+    retry,
+    wait_exponential,
+    stop_after_attempt,
+    retry_if_exception_type,
+)
 from aiolimiter import AsyncLimiter
 
 THIS_DIR = Path(__file__).parent
@@ -141,17 +147,34 @@ async def response_indicates_available_title(response: aiohttp.ClientResponse):
     return response.ok
 
 
+def _retry_log(retry_state):
+    logging.log(
+        logging.WARNING,
+        "Retrying %s(%s): attempt %s",
+        retry_state.fn,
+        retry_state.args,
+        retry_state.attempt_number,
+    )
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type(aiohttp.ClientResponseError),
+    wait=wait_exponential(multiplier=60, min=60, max=300),
+    before=_retry_log,
+)
 async def get_netflix(
     netflix_id: int, request_url: str, session: aiohttp.ClientSession
 ) -> NetflixResponse:
     async with session.get(request_url) as response:
         logging.info(f"Starting request for {request_url}")
         status = response.status
-        html = await response.text()
-        available = await response_indicates_available_title(response)
 
         if status not in (200, 301, 302, 404):
-            raise ValueError(f"Unexpected HTTP status for {request_url}: {status}")
+            response.raise_for_status()
+
+        html = await response.text()
+        available = await response_indicates_available_title(response)
 
         return NetflixResponse(
             netflix_id=netflix_id,
