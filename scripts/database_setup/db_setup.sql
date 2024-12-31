@@ -145,3 +145,30 @@ CREATE OR REPLACE TRIGGER ratings_audit_trigger
 AFTER INSERT OR UPDATE OR DELETE ON public.ratings
 FOR EACH ROW
 EXECUTE FUNCTION UDF_TRIGGER_AUDIT();
+
+
+/*
+    Ancillary functions for QA/analysis/whatever
+*/
+CREATE OR REPLACE FUNCTION JSON_EXTRACT_ELEMENT_FROM_METADATA(
+    metadata jsonb,
+    element_type text
+) RETURNS jsonb AS $$
+DECLARE
+    element JSONB;
+BEGIN
+    -- Iterate through the JSONB array
+    FOR element IN
+        SELECT value
+        FROM jsonb_array_elements(metadata)
+    LOOP
+        -- Check if the "type" field matches the supplied element_type
+        IF element->>'type' = element_type THEN
+            RETURN element;
+        END IF;
+    END LOOP;
+
+    -- Return NULL if no matching element is found
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
