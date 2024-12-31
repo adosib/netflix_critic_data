@@ -94,8 +94,8 @@ def build_query(title, content_type, release_year, permute=False) -> str | list[
         # Some alternative searches to consider
         # in case the Google user reviews snippet isn't present for the initial query
         alt1 = f"{title} ({release_year}) reviews"
-        alt2 = f"{title} ({release_year})"
-        alt3 = f"{title} ({content_type})"
+        alt2 = f"{title} ({content_type.replace('series', 'tv show')})"
+        alt3 = f"{title} ({release_year})"
         return [query, alt1, alt2, alt3]
     return query
 
