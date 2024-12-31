@@ -13,14 +13,15 @@ import aiofiles
 from bs4 import BeautifulSoup
 from psycopg import sql
 from apify_client import ApifyClientAsync
+from psycopg.rows import namedtuple_row
 
 THIS_DIR = Path(__file__).parent
 ROOT_DIR, *_ = [
-    parent for parent in THIS_DIR.parents if parent.stem == "netflix_critic"
+    parent for parent in THIS_DIR.parents if parent.stem == "netflix_critic_data"
 ]
 SAVETO_DIR = ROOT_DIR / "data" / "raw" / "serp"
 LOG_DIR = ROOT_DIR / "logs"
-SCRIPTS_DIR = (THIS_DIR / "..").resolve()
+SCRIPTS_DIR = THIS_DIR / "utils"
 
 JS_EVAL_SCRIPT = SCRIPTS_DIR / "evaluate.js"
 
@@ -87,42 +88,11 @@ def _normalize_rating(rating):
         return rating_split[0]
 
 
-def get_field(parsed_data, field):
-    fields = {}
-    hero_data = parsed_data[0]["data"]["details"][0]["data"]
-    fields["title"] = hero_data.get("title")
-    # NOTE: shows don't have a runtime attribute (their episodes do)
-    fields["runtime"] = hero_data.get("runtime")
-    release_year = hero_data.get("year")
-    fields["release_year"] = _get_release_year(release_year, parsed_data)
-    fields["content_type"] = _get_content_type(parsed_data)
-    return fields.get(field)
-
-
-def _get_release_year(release_year: int, all_data: list[dict]):
-    for item in all_data:
-        if item["type"] == "seasonsAndEpisodes":
-            try:
-                year_first_ep = item["data"]["seasons"][0]["episodes"][0]["year"]
-                return year_first_ep if year_first_ep < release_year else release_year
-            except (TypeError, KeyError):
-                return release_year
-    return release_year
-
-
-def _get_content_type(parsed_data: list[dict]):
-    for item in parsed_data:
-        if item["type"] == "moreDetails":
-            return item["data"]["type"]
-
-
-def build_query(parsed_data, permute=False) -> str | list[str]:
-    title = get_field(parsed_data, "title")
-    release_year = get_field(parsed_data, "release_year")
-    content_type = get_field(parsed_data, "content_type")
+def build_query(title, content_type, release_year, permute=False) -> str | list[str]:
     query = f'"{title}" ({release_year}) reviews'
     if permute:
-        # Some alternative searches to consider in case the Google user reviews snippet isn't present for the initial query
+        # Some alternative searches to consider
+        # in case the Google user reviews snippet isn't present for the initial query
         alt1 = f"{title} ({release_year}) reviews"
         alt2 = f"{title} ({release_year})"
         alt3 = f"{title} ({content_type})"
@@ -227,24 +197,8 @@ async def _extract_non_link_reviews(review):
 
 async def update_db(
     dbcur: psycopg.Cursor,
-    netflix_id: int,
-    parsed_data: list[dict],
     ratings_data: list[dict],
 ):
-    to_update = ("release_year", "runtime", "metadata")
-    release_year = get_field(parsed_data, "release_year")
-    runtime = get_field(parsed_data, "runtime")
-
-    update_titles_query = sql.SQL(
-        "UPDATE titles SET ({fields}) = ({values}) WHERE netflix_id = {netflix_id}"
-    ).format(
-        fields=sql.SQL(", ").join(map(sql.Identifier, to_update)),
-        values=sql.SQL(", ").join((release_year, runtime, json.dumps(parsed_data))),
-        netflix_id=netflix_id,
-    )
-    logging.info(f"Now executing: {update_titles_query.as_string()}")
-    dbcur.execute(update_titles_query)
-
     upsert_ratings_query = sql.SQL(
         "INSERT INTO ratings (netflix_id, vendor, url, rating, ratings_count, checked_at) "
         "VALUES (%(netflix_id)s, %(vendor)s, %(url)s, %(rating)s, %(ratings_count)s, %(checked_at)s) "
@@ -257,27 +211,8 @@ async def update_db(
     dbcur.executemany(upsert_ratings_query, ratings_data)
 
 
-async def extract_netflix_context(html_path):
-    logging.info(f"Attempting to extract context from {html_path}")
-    process = await asyncio.create_subprocess_exec(
-        "node",
-        JS_EVAL_SCRIPT,
-        html_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    stdout, stderr = await process.communicate()
-
-    if process.returncode == 0:
-        return stdout.decode()
-    else:
-        logging.error(stderr)
-        return None
-
-
-async def get_serp_html(netflix_id, parsed_data):
-    queries = build_query(parsed_data, permute=True)
+async def get_serp_html(netflix_id, title, content_type, release_year):
+    queries = build_query(title, content_type, release_year, permute=True)
     start_url, *alt_search_paths = build_google_urls(queries)
     run: dict = await CLIENT.actor("MpRbnNmVAoj5RC1Ma").call(
         # https://docs.apify.com/api/client/python/reference/class/ActorClientAsync#call
@@ -354,20 +289,17 @@ async def get_ratings(netflix_id, html) -> list[dict]:
     return reviews
 
 
-async def run(semaphore, dbcur, netflix_id: str):
+async def run(semaphore, dbcur, row):
     # Need to use a Semaphore to limit concurrent Actor runs, otherwise risk the APIfy error:
     # apify_client._errors.ApifyApiError: By launching this job you will exceed the memory limit of 8192MB for all your Actor runs and builds [...]
     async with semaphore:
-        html_file_path = ROOT_DIR / "data" / "raw" / "title" / f"{netflix_id}.html"
-        data = await extract_netflix_context(html_file_path)
-        try:
-            parsed_data: list[dict] = json.loads(data)
-            html = await get_serp_html(netflix_id, parsed_data)
-            await save_response_body(html, SAVETO_DIR / f"{netflix_id}.html")
-            ratings_data = await get_ratings(netflix_id, html)
-            await update_db(dbcur, netflix_id, parsed_data, ratings_data)
-        except json.JSONDecodeError as e:
-            logging.exception(e)
+        netflix_id = row.netflix_id
+        html = await get_serp_html(
+            netflix_id, row.title, row.content_type, row.release_year
+        )
+        await save_response_body(html, SAVETO_DIR / f"{netflix_id}.html")
+        ratings_data = await get_ratings(netflix_id, html)
+        await update_db(dbcur, ratings_data)
 
 
 async def main():
@@ -376,21 +308,54 @@ async def main():
         "dbname=postgres user=postgres", autocommit=True
     ) as dbconn:
         with dbconn.cursor() as dbcur:
+            dbcur.row_factory = namedtuple_row
             dbcur.execute("""
-                SELECT DISTINCT titles.netflix_id
-                FROM titles
-                JOIN availability 
-                    ON availability.netflix_id = titles.netflix_id
-                LEFT JOIN ratings
-                    on ratings.netflix_id = titles.netflix_id
-                WHERE availability.available = true
-                  AND ratings.id IS NULL
-                LIMIT 32;
+                select searchable.*
+                from (
+                    select distinct
+                        coalesce(a.redirected_netflix_id, t.netflix_id) as netflix_id,
+                        coalesce(t2.metadata, t.metadata) -> 0 -> 'data' ->> 'title' as title,
+                        replace(
+                            json_extract_element_from_metadata(
+                                coalesce(t2.metadata, t.metadata),
+                                'moreDetails'
+                            )
+                            -> 'data'
+                            ->> 'type',
+                            'show',
+                            'series'
+                        )::public.content_type as content_type,
+                        coalesce(t2.release_year, t.release_year) as release_year
+                    from availability as a
+                    inner join titles as t
+                        on a.netflix_id = t.netflix_id
+                    left join titles as t2
+                        on a.redirected_netflix_id = t2.netflix_id
+                    where
+                        a.country = 'US'
+                        and a.available = true
+                        and coalesce(
+                            coalesce(t2.metadata, t.metadata)
+                            -> 0
+                            -> 'data'
+                            -> 'details'
+                            -> 0
+                            -> 'data'
+                            -> 'coreGenre'
+                            ->> 'genreName', ''
+                        ) <> 'Special Interest'
+                ) searchable
+                left join ratings 
+                    on ratings.netflix_id = searchable.netflix_id
+                    and ratings.vendor = 'Google users'
+                where ratings.id is null;
             """)
             async with asyncio.TaskGroup() as tg:
-                for netflix_id, *_ in dbcur:
+                for row in dbcur:
+                    netflix_id = row.netflix_id
                     tg.create_task(
-                        run(semaphore, dbcur, netflix_id), name=str(netflix_id)
+                        run(semaphore, dbcur, row),
+                        name=str(netflix_id),
                     )
 
 
