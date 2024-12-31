@@ -11,4 +11,5 @@ dependencies = [
     "apify-client>=1.8.1",
     "beautifulsoup4>=4.12.3",
     "psycopg[binary]>=3.2.3",
+    "tenacity>=9.0.0",
 ]
