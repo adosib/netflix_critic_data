@@ -29,11 +29,13 @@ LOG_DIR = ROOT_DIR / "logs"
 COUNTRY_CODE = "US"
 
 log_file = LOG_DIR / f'{datetime.now().strftime('%Y%m%d%H%M%S')}.log'
-logging.basicConfig(
-    filename=log_file,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logger = logging.getLogger(__name__)
+file_handler = logging.FileHandler(log_file)
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+file_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.setLevel(logging.DEBUG)
 
 
 @dataclass
@@ -104,7 +106,7 @@ async def update_database(cursor: psycopg.Cursor, record: dict):
         "ON CONFLICT (netflix_id, country) DO UPDATE "
         "SET redirected_netflix_id = EXCLUDED.redirected_netflix_id, available = EXCLUDED.available, titlepage_reachable = EXCLUDED.titlepage_reachable, checked_at = EXCLUDED.checked_at"
     )
-    logging.info(f"Now executing: {upsert_availability_query.as_string()}")
+    logger.info(f"Now executing: {upsert_availability_query.as_string()}")
     cursor.execute(upsert_availability_query, record)
 
 
@@ -128,8 +130,8 @@ async def response_indicates_available_title(response: aiohttp.ClientResponse):
 
 
 def _retry_log(retry_state):
-    logging.log(
-        logging.WARNING,
+    logger.log(
+        logger.WARNING,
         "Retrying %s(%s): attempt %s",
         retry_state.fn,
         retry_state.args,
@@ -147,7 +149,7 @@ async def get_netflix(
     netflix_id: int, request_url: str, session: aiohttp.ClientSession
 ) -> NetflixResponse:
     async with session.get(request_url) as response:
-        logging.info(f"Starting request for {request_url}")
+        logger.info(f"Starting request for {request_url}")
         status = response.status
 
         if status not in (200, 301, 302, 404):
@@ -185,11 +187,11 @@ async def run(netflix_id: int, session_handler: SessionHandler, dbcur: psycopg.C
                     title_id = response.redirected_netflix_id
 
             except aiohttp.client_exceptions.NonHttpUrlRedirectClientError as err:
-                logging.exception(err)
+                logger.exception(err)
                 raise
 
             except aiohttp.client_exceptions.ServerDisconnectedError as err:
-                logging.exception(err)
+                logger.exception(err)
                 raise
 
     checked_at = datetime.now(timezone.utc)
