@@ -28,27 +28,6 @@ LOG_DIR = ROOT_DIR / "logs"
 
 COUNTRY_CODE = "US"
 
-COOKIE = {"Cookie": os.environ["NETFLIX_COOKIE"]}
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "max-age=0",
-    "Connection": "keep-alive",
-    "Host": "www.netflix.com",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-model": '""',
-    "sec-ch-ua-platform": '"macOS"',
-    "sec-ch-ua-platform-version": '"15.1.0"',
-}
-
 log_file = LOG_DIR / f'{datetime.now().strftime('%Y%m%d%H%M%S')}.log'
 logging.basicConfig(
     filename=log_file,
@@ -81,8 +60,9 @@ class NetflixResponse:
 
 
 class SessionHandler:
-    def __init__(self):
-        concurrency_limit = 5
+    def __init__(self, **kwargs):
+        concurrency_limit = kwargs.pop("concurrency_limit", 5)
+        headers = kwargs.pop("headers", {})
         connector = aiohttp.TCPConnector(
             limit=concurrency_limit, limit_per_host=concurrency_limit
         )
@@ -101,7 +81,7 @@ class SessionHandler:
             connector=connector, timeout=timeout
         )
         self.authenticated_session = aiohttp.ClientSession(
-            connector=connector, timeout=timeout, headers={**HEADERS, **COOKIE}
+            connector=connector, timeout=timeout, headers=headers
         )
 
     async def __aenter__(self):
@@ -112,9 +92,9 @@ class SessionHandler:
         await self.authenticated_session.close()
 
     async def choose_session(self, urlpath) -> aiohttp.ClientSession:
-        if "watch" in urlpath:
-            return self.authenticated_session
-        return self.noauth_session
+        if "title" in urlpath:
+            return self.noauth_session
+        return self.authenticated_session
 
 
 async def update_database(cursor: psycopg.Cursor, record: dict):
@@ -262,7 +242,7 @@ async def main():
                 {"country": COUNTRY_CODE},
             )
 
-            async with SessionHandler() as session_handler:
+            async with SessionHandler(headers={**HEADERS, **COOKIE}) as session_handler:
                 for netflix_id, *_ in dbcur:
                     task = asyncio.create_task(
                         run(netflix_id, session_handler, dbcur),
@@ -277,4 +257,24 @@ async def main():
 
 
 if __name__ == "__main__":
+    COOKIE = {"Cookie": os.environ["NETFLIX_COOKIE"]}
+    HEADERS = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "max-age=0",
+        "Connection": "keep-alive",
+        "Host": "www.netflix.com",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-model": '""',
+        "sec-ch-ua-platform": '"macOS"',
+        "sec-ch-ua-platform-version": '"15.1.0"',
+    }
     asyncio.run(main(), debug=True)
