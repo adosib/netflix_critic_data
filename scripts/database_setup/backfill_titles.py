@@ -55,7 +55,7 @@ def _get_content_type(parsed_data: list[dict]):
 
 
 async def extract_netflix_context(html: Path | HTMLContent):
-    subprocess_args = ["node", JS_EVAL_SCRIPT, html]
+    subprocess_args = ["node", JS_EVAL_SCRIPT]
     subprocess_kwargs = {
         "stdout": asyncio.subprocess.PIPE,
         "stderr": asyncio.subprocess.PIPE,
@@ -64,8 +64,8 @@ async def extract_netflix_context(html: Path | HTMLContent):
 
     if isinstance(html, Path):
         logger.info(f"Attempting to extract context from {html}")
+        subprocess_args.append(str(html))
     else:
-        subprocess_args.pop()
         subprocess_kwargs["stdin"] = asyncio.subprocess.PIPE
         input = html.encode()
 

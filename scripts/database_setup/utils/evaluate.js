@@ -9,7 +9,7 @@ try {
   html = fs.readFileSync(process.argv[2], 'utf-8');
 } catch (error) {
   // If no file argument is provided, read from stdin
-  const stdinBuffer = fs.readFileSync(process.stdin.fd, 'utf-8');
+  const stdinBuffer = fs.readFileSync(0, 'utf-8');
   html = stdinBuffer.toString();
 }
 
