@@ -2,19 +2,30 @@
 const { JSDOM } = require('jsdom');
 const fs = require('fs');
 
+let html;
 // Read the HTML file
-const html = fs.readFileSync(process.argv[2], 'utf-8');
+try {
+  // Try to read the HTML file from the first argument
+  html = fs.readFileSync(process.argv[2], 'utf-8');
+} catch (error) {
+  // If no file argument is provided, read from stdin
+  const stdinBuffer = fs.readFileSync(process.stdin.fd, 'utf-8');
+  html = stdinBuffer.toString();
+}
 
 const dom = new JSDOM(html, {
-    runScripts: "dangerously", // Allow running inline scripts (like in a browser)
-    // resources: "usable" // Load external resources like scripts and stylesheets
-  });
+  runScripts: "dangerously", // Allow running inline scripts (like in a browser)
+  // resources: "usable" // Load external resources like scripts and stylesheets
+});
 
 dom.window.addEventListener("load", () => {
-    // After the page is loaded, you can access the 'netflix.reactContext'
+  try {
+    // Access the 'netflix.reactContext' and extract the desired data
     const reactContext = dom.window.netflix.reactContext;
-  
-    // Now access the data you want to stringify
     const sectionData = reactContext.models.nmTitleUI.data.sectionData;
     console.log(JSON.stringify(sectionData));
-  });
+  } catch (error) {
+    console.error("Error extracting Netflix context:", error.message);
+    process.exit(1);
+  }
+});

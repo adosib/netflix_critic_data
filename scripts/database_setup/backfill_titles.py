@@ -1,6 +1,7 @@
 import json
 import asyncio
 import logging
+from typing import NewType
 from pathlib import Path
 from datetime import datetime
 
@@ -15,6 +16,8 @@ SAVETO_DIR = ROOT_DIR / "data" / "raw" / "serp"
 LOG_DIR = ROOT_DIR / "logs"
 
 JS_EVAL_SCRIPT = THIS_DIR / "utils" / "evaluate.js"
+
+HTMLContent = NewType("HTML", str)
 
 filename = Path(__file__).stem
 log_file = LOG_DIR / f"{filename}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
@@ -51,17 +54,26 @@ def _get_content_type(parsed_data: list[dict]):
             return item["data"]["type"]
 
 
-async def extract_netflix_context(html_path):
-    logger.info(f"Attempting to extract context from {html_path}")
+async def extract_netflix_context(html: Path | HTMLContent):
+    subprocess_args = ["node", JS_EVAL_SCRIPT, html]
+    subprocess_kwargs = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+    }
+    input = None
+
+    if isinstance(html, Path):
+        logger.info(f"Attempting to extract context from {html}")
+    else:
+        subprocess_args.pop()
+        subprocess_kwargs["stdin"] = asyncio.subprocess.PIPE
+        input = html.encode()
+
     process = await asyncio.create_subprocess_exec(
-        "node",
-        JS_EVAL_SCRIPT,
-        html_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        *subprocess_args, **subprocess_kwargs
     )
 
-    stdout, stderr = await process.communicate()
+    stdout, stderr = await process.communicate(input=input)
 
     if process.returncode == 0:
         return stdout.decode()
