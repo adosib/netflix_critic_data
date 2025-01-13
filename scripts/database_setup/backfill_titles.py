@@ -17,12 +17,8 @@ LOG_DIR = ROOT_DIR / "logs"
 JS_EVAL_SCRIPT = THIS_DIR / "utils" / "evaluate.js"
 
 filename = Path(__file__).stem
-log_file = LOG_DIR / f'{filename}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log'
-logging.basicConfig(
-    filename=log_file,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+log_file = LOG_DIR / f"{filename}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+logger = logging.getLogger(__name__)
 
 
 def get_field(parsed_data, field):
@@ -56,7 +52,7 @@ def _get_content_type(parsed_data: list[dict]):
 
 
 async def extract_netflix_context(html_path):
-    logging.info(f"Attempting to extract context from {html_path}")
+    logger.info(f"Attempting to extract context from {html_path}")
     process = await asyncio.create_subprocess_exec(
         "node",
         JS_EVAL_SCRIPT,
@@ -70,7 +66,7 @@ async def extract_netflix_context(html_path):
     if process.returncode == 0:
         return stdout.decode()
     else:
-        logging.error(stderr)
+        logger.error(stderr)
         return None
 
 
@@ -90,7 +86,7 @@ async def update_db(
         values=sql.SQL(", ").join((release_year, runtime, json.dumps(parsed_data))),
         netflix_id=netflix_id,
     )
-    logging.info(f"Now executing: {update_titles_query.as_string()}")
+    logger.info(f"Now executing: {update_titles_query.as_string()}")
     dbcur.execute(update_titles_query)
 
 
@@ -101,7 +97,7 @@ async def run(dbcur, netflix_id):
             metadata = json.loads(await extract_netflix_context(html_file_path))
             await update_db(dbcur, netflix_id, metadata)
         except json.decoder.JSONDecodeError:
-            logging.error(f"JSONDecodeError for {html_file_path}")
+            logger.error(f"JSONDecodeError for {html_file_path}")
 
 
 async def main():
@@ -130,4 +126,10 @@ async def main():
 
 
 if __name__ == "__main__":
+    file_handler = logging.FileHandler(log_file, mode="a+")
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.DEBUG)
     asyncio.run(main())
