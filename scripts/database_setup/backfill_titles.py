@@ -51,10 +51,11 @@ def _get_release_year(release_year: int, all_data: list[dict]):
 def _get_content_type(parsed_data: list[dict]):
     for item in parsed_data:
         if item["type"] == "moreDetails":
-            return item["data"]["type"]
+            return item["data"]["type"].replace("show", "tv series")
 
 
 async def extract_netflix_context(html: Path | HTMLContent):
+    # TODO sub out subprocess with goated pythonmonkey library
     subprocess_args = ["node", JS_EVAL_SCRIPT]
     subprocess_kwargs = {
         "stdout": asyncio.subprocess.PIPE,
