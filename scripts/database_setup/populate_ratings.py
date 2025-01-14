@@ -45,12 +45,8 @@ RGX_RATING_PATTERNS = {
     ),  # practically identical to out_of_5
 }
 
-log_file = LOG_DIR / f'{datetime.now().strftime('%Y%m%d%H%M%S')}.log'
-logging.basicConfig(
-    filename=log_file,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+logger = logging.getLogger(__name__)
 
 with (
     open(SCRIPTS_DIR / "playwright-pagefn.js", "r") as f1,
@@ -89,12 +85,12 @@ def _normalize_rating(rating):
 
 
 def build_query(title, content_type, release_year, permute=False) -> str | list[str]:
-    query = f'"{title}" ({release_year}) reviews'
+    query = f'"{title}" {content_type} ({release_year})'
     if permute:
         # Some alternative searches to consider
         # in case the Google user reviews snippet isn't present for the initial query
-        alt1 = f"{title} ({release_year}) reviews"
-        alt2 = f"{title} ({content_type.replace('series', 'tv show')})"
+        alt1 = f"{title} ({content_type}) reviews"
+        alt2 = f"{title} ({content_type})"
         alt3 = f"{title} ({release_year})"
         return [query, alt1, alt2, alt3]
     return query
@@ -105,12 +101,7 @@ def build_google_urls(queries) -> list[str]:
     if isinstance(queries, str):
         queries = [queries]
     return [
-        f"{base_url}?{
-            urlencode(
-                {"q": query, 
-                "hl": "en", 
-                "geo": "us"}
-            )}"
+        f"{base_url}?{urlencode({'q': query, 'hl': 'en', 'geo': 'us'})}"
         for query in queries
     ]
 
@@ -181,7 +172,7 @@ async def _extract_non_link_reviews(review):
                 re.search(r"\d+(?=\s+ratings)", stripped_strings[7]).group(0)
             )
         except (IndexError, ValueError, AttributeError) as e:
-            logging.error(f"Error processing audience summary: {e}")
+            logger.error(f"Error processing audience summary: {e}")
         finally:
             reviews_list.append(
                 {
@@ -205,7 +196,7 @@ async def update_db(
         "ON CONFLICT (netflix_id, vendor) DO UPDATE "
         "SET url = EXCLUDED.url, rating = EXCLUDED.rating, ratings_count = EXCLUDED.ratings_count, checked_at = EXCLUDED.checked_at"
     )
-    logging.info(
+    logger.info(
         f"Now executing: {upsert_ratings_query.as_string()} with data {json.dumps(ratings_data, indent=4, cls=DateTimeEncoder)}"
     )
     dbcur.executemany(upsert_ratings_query, ratings_data)
@@ -266,12 +257,12 @@ async def _get_dataset(run):
 
     dataset_items = await CLIENT.dataset(run["defaultDatasetId"]).list_items()
 
-    logging.info(f"Found {len(dataset_items.items)} dataset items for run {run["id"]}")
+    logger.info(f"Found {len(dataset_items.items)} dataset items for run {run['id']}")
 
     # https://docs.apify.com/api/client/python/reference/class/DatasetClientAsync#list_items
     for i, dataset in enumerate(dataset_items.items):
         if dataset.get("googleUserRating"):
-            logging.info(f"Found the Google user rating in dataset item {i}")
+            logger.info(f"Found the Google user rating in dataset item {i}")
             return dataset
     # If we don't have Google user reviews, we can default to returning the dataset item
     # with the most captured review elements
@@ -323,7 +314,7 @@ async def main():
                             -> 'data'
                             ->> 'type',
                             'show',
-                            'series'
+                            'tv series'
                         )::public.content_type as content_type,
                         coalesce(t2.release_year, t.release_year) as release_year
                     from availability as a
@@ -360,4 +351,10 @@ async def main():
 
 
 if __name__ == "__main__":
+    file_handler = logging.FileHandler(log_file, mode="a+")
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.DEBUG)
     asyncio.run(main())
