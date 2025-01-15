@@ -4,6 +4,7 @@ import json
 import random
 import asyncio
 import logging
+from typing import Callable, Optional
 from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlencode
@@ -29,22 +30,6 @@ JS_EVAL_SCRIPT = SCRIPTS_DIR / "evaluate.js"
 # Initialize the ApifyClient with your API token
 CLIENT = ApifyClientAsync(os.getenv("APIFY_TOKEN"))
 
-RGX_RATING_PATTERNS = {
-    "percent": re.compile(r"\d{1,3}(?=%)"),
-    "out_of_5": re.compile(
-        r"""
-        (?:(?<=\s)|(?<=^)) # positive look behinds to make sure the character preceding is either whitespace or start of string
-        (?:[0-4](?:\.\d+)?|5(\.0*)?) # match 0-4 optionally followed by a dot and a number 0-9 (e.g. 4.4) OR '5' / '5.0'
-        \/5 # match '/5'
-        (?=\s|$) # positive lookahead to ensure the succeeding character is either whitespace or end of string
-        """,
-        re.VERBOSE,
-    ),
-    "out_of_10": re.compile(
-        r"(?:(?<=\s)|(?<=^))(?:\d(?:\.\d+)?|10(\.0*)?)\/10(?=\s|$)"
-    ),  # practically identical to out_of_5
-}
-
 log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
 logger = logging.getLogger(__name__)
 
@@ -65,23 +50,57 @@ class DateTimeEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def find_rating(text):
-    for _, rgx in RGX_RATING_PATTERNS.items():
-        match = re.search(rgx, text)
+class RatingPattern:
+    def __init__(
+        self, name: str, pattern: str, normalization: Callable[[str], int] = None
+    ):
+        self.name = name
+        self.regex = re.compile(pattern, re.VERBOSE)
+        self.normalization = normalization
+        if normalization is None:
+            self.normalization = self.normalize_fractional
+
+    def match(self, text: str) -> Optional[int]:
+        match = self.regex.search(text)
         if match:
-            return _normalize_rating(match.group(0))
-
-
-def _normalize_rating(rating):
-    rating_split = re.findall(r"[\d\.]+", rating)
-    len_ = len(rating_split)
-    if len_ > 2 or len_ == 0:
+            return self.normalization(match.group(0))
         return None
-    try:
-        numerator, denominator = map(float, rating_split)
-        return int(round(numerator / denominator, 2) * 100)
-    except ValueError:
-        return rating_split[0]
+
+    def normalize_fractional(self, rating: str) -> int:
+        numerator, denominator = map(float, rating.split("/"))
+        return round((numerator / denominator) * 100)
+
+
+RATING_PATTERNS = [
+    RatingPattern("percent", r"\d{1,3}(?=%)", lambda x: int(x)),
+    RatingPattern(
+        "out_of_5",
+        r"""
+            (?:(?<=\s)|(?<=^)) # positive look behind to make sure the character preceding is either whitespace or start of string
+            (?:[0-4](?:\.\d+)?|5(\.0*)?) # match 0-4 optionally followed by a dot and a number 0-9 (e.g. 4.4) OR '5' / '5.0'
+            \/5 # match '/5'
+            (?=\s|$) # positive lookahead to ensure the succeeding character is either whitespace or end of string
+        """,
+    ),
+    # practically identical to out_of_5
+    RatingPattern(
+        "out_of_10",
+        r"(?:(?<=\s)|(?<=^))(?:\d(?:\.\d+)?|10(\.0*)?)\/10(?=\s|$)",
+    ),
+    RatingPattern(
+        "audience_rating",
+        r"^[0-4]\.\d+|5\.0$",
+        lambda x: int(float(x) * 20),
+    ),
+]
+
+
+def find_rating(text: str) -> Optional[int]:
+    for pattern in RATING_PATTERNS:
+        rating = pattern.match(text)
+        if rating is not None:
+            return rating
+    return None
 
 
 def build_query(title, content_type, release_year, permute=False) -> str | list[str]:
@@ -113,6 +132,8 @@ async def save_response_body(response_body: str, filepath: Path):
 
 async def extract_reviews_from_serp(html):
     soup = BeautifulSoup(html, "html.parser")
+    # TODO this isn't super robust - see serp/80107103.html (Google search term: "ONE PIECE" tv series (1999.0))
+    # The IMDb rating isn't captured
     reviews = soup.select("[data-attrid$=reviews], [data-attrid$=thumbs_up]")
     reviews_list = []
     for review in reviews:
@@ -167,10 +188,13 @@ async def _extract_non_link_reviews(review):
         rating = None
         ct_ratings = None
         try:
-            rating = float(stripped_strings[6]) * 20  # Rating is out of 100
-            ct_ratings = int(
-                re.search(r"\d+(?=\s+ratings)", stripped_strings[7]).group(0)
-            )
+            for string in stripped_strings:
+                if rating is None:
+                    rating = find_rating(string)
+                if ct_ratings is None:
+                    match = re.search(r"\d+(?=\s+ratings)", string)
+                    if match:
+                        ct_ratings = int(match.group(0))
         except (IndexError, ValueError, AttributeError) as e:
             logger.error(f"Error processing audience summary: {e}")
         finally:
