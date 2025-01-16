@@ -24,25 +24,34 @@ log_file = LOG_DIR / f"{filename}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
 logger = logging.getLogger(__name__)
 
 
-def get_field(parsed_data, field):
+def _parse_hero_data(parsed_data) -> dict:
+    try:
+        return parsed_data[0]["data"]["details"][0]["data"]
+    except (TypeError, IndexError):
+        return {}
+
+
+def get_field(parsed_data: list[dict], field: str):
     fields = {}
-    hero_data = parsed_data[0]["data"]["details"][0]["data"]
+    hero_data = _parse_hero_data(parsed_data)
     fields["title"] = hero_data.get("title")
-    # NOTE: shows don't have a runtime attribute (their episodes do)
-    fields["runtime"] = hero_data.get("runtime")
+    fields["runtime"] = hero_data.get(
+        "runtime"
+    )  # NOTE: shows don't have a runtime attribute (their episodes do)
     release_year = hero_data.get("year")
-    fields["release_year"] = _get_release_year(release_year, parsed_data)
+    fields["release_year"] = _get_release_year(parsed_data, release_year)
     fields["content_type"] = _get_content_type(parsed_data)
     return fields.get(field)
 
 
-def _get_release_year(release_year: int, all_data: list[dict]):
-    for item in all_data:
+def _get_release_year(parsed_data: list[dict], release_year: int):
+    for item in parsed_data:
         if item["type"] == "seasonsAndEpisodes":
             try:
-                # TODO order isn't acutally guaranteed so ["seasons"][0] is not always S1
-                year_first_ep = item["data"]["seasons"][0]["episodes"][0]["year"]
-                return year_first_ep if year_first_ep < release_year else release_year
+                for season in item["data"]["seasons"]:
+                    for episode in season["episodes"]:
+                        if episode["year"] > 1900 and episode["year"] < release_year:
+                            release_year = episode["year"]
             except (TypeError, KeyError):
                 return release_year
     return release_year
