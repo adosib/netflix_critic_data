@@ -61,7 +61,7 @@ class SessionHandler:
         connector = aiohttp.TCPConnector(
             limit=concurrency_limit, limit_per_host=concurrency_limit
         )
-        headers = kwargs.pop("headers", None)
+        headers = kwargs.pop("headers", {})
         # There's some weird timeout stuff that happens here
         # which necessitated the need for the ClientTimeout instance:
         # https://docs.aiohttp.org/en/stable/client_quickstart.html#aiohttp-client-timeouts
