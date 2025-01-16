@@ -28,7 +28,7 @@ LOG_DIR = ROOT_DIR / "logs"
 
 COUNTRY_CODE = "US"
 
-log_file = LOG_DIR / f'{datetime.now().strftime('%Y%m%d%H%M%S')}.log'
+log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
 logger = logging.getLogger(__name__)
 
 
@@ -58,10 +58,10 @@ class NetflixResponse:
 class SessionHandler:
     def __init__(self, **kwargs):
         concurrency_limit = kwargs.pop("concurrency_limit", 5)
-        headers = kwargs.pop("headers", {})
         connector = aiohttp.TCPConnector(
             limit=concurrency_limit, limit_per_host=concurrency_limit
         )
+        headers = kwargs.pop("headers")
         # There's some weird timeout stuff that happens here
         # which necessitated the need for the ClientTimeout instance:
         # https://docs.aiohttp.org/en/stable/client_quickstart.html#aiohttp-client-timeouts
@@ -73,19 +73,29 @@ class SessionHandler:
         # but I'll be nice and limit to 5 r/s
         self.limiter = AsyncLimiter(1, 1.0 / concurrency_limit)
 
+        self.active_sessions = []
+
         self.noauth_session = aiohttp.ClientSession(
-            connector=connector, timeout=timeout
+            connector=connector, timeout=timeout, **kwargs
         )
-        self.authenticated_session = aiohttp.ClientSession(
-            connector=connector, timeout=timeout, headers=headers
-        )
+        self.active_sessions.append(self.noauth_session)
+
+        if headers.get("Cookie", None):
+            self.authenticated_session = aiohttp.ClientSession(
+                connector=connector, timeout=timeout, headers=headers, **kwargs
+            )
+            self.active_sessions.append(self.authenticated_session)
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
-        await self.noauth_session.close()
-        await self.authenticated_session.close()
+        for session in self.active_sessions:
+            await session.close()
+
+    async def close(self):
+        for session in self.active_sessions:
+            await session.close()
 
     async def choose_session(self, urlpath) -> aiohttp.ClientSession:
         if "title" in urlpath:
