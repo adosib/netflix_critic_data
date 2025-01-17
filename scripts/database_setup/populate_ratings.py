@@ -17,10 +17,6 @@ SAVETO_DIR = ROOT_DIR / "data" / "raw" / "serp"
 LOG_DIR = ROOT_DIR / "logs"
 
 
-log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
-logger = logging.getLogger(__name__)
-
-
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime):
@@ -115,10 +111,11 @@ async def main():
 
 
 if __name__ == "__main__":
+    log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    logger = logging.getLogger(__name__)
     file_handler = logging.FileHandler(log_file, mode="a+")
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
-
     logger.addHandler(file_handler)
     logger.setLevel(logging.DEBUG)
     configure_logger(logger)
