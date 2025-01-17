@@ -20,7 +20,7 @@ from (
     select
         t1.*,
         t1.extracted_title = t1.title as title_eq,
-        t1.content_type::text = (case t1.extracted_content_type when 'show' then 'series' else t1.extracted_content_type end) as content_type_eq
+        t1.content_type::text = (case t1.extracted_content_type when 'show' then 'tv series' else t1.extracted_content_type end) as content_type_eq
     from (
         select
             *,
@@ -151,7 +151,7 @@ from (
             -> 'data'
             ->> 'type',
             'show',
-            'series'
+            'tv series'
         )::public.content_type as content_type,
         coalesce(a.redirected_netflix_id, t.netflix_id) as netflix_id,
         coalesce(t2.metadata, t.metadata) -> 0 -> 'data' ->> 'title' as title,
