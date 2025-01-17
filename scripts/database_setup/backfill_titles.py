@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-from common import get_field, extract_netflix_react_context
+from common import get_field, configure_logger, extract_netflix_react_context
 from psycopg import Cursor, Connection, sql
 
 THIS_DIR = Path(__file__).parent
@@ -13,11 +13,6 @@ ROOT_DIR, *_ = [
 ]
 SAVETO_DIR = ROOT_DIR / "data" / "raw" / "serp"
 LOG_DIR = ROOT_DIR / "logs"
-
-
-filename = Path(__file__).stem
-log_file = LOG_DIR / f"{filename}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
-logger = logging.getLogger(__name__)
 
 
 async def update_db(
@@ -71,10 +66,15 @@ async def main():
 
 
 if __name__ == "__main__":
+    filename = Path(__file__).stem
+    log_file = LOG_DIR / f"{filename}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    logger = logging.getLogger(__name__)
     file_handler = logging.FileHandler(log_file, mode="a+")
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
 
     logger.addHandler(file_handler)
     logger.setLevel(logging.DEBUG)
+    configure_logger(logger)
+
     asyncio.run(main())

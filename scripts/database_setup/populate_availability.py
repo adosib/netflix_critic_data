@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import aiohttp
 from bs4 import BeautifulSoup
-from common import HttpSessionHandler, save_response_body
+from common import HttpSessionHandler, configure_logger, save_response_body
 from psycopg import Cursor, Connection, sql
 from tenacity import (
     retry,
@@ -25,9 +25,6 @@ WATCHPAGE_SAVETO_DIR = ROOT_DIR / "data" / "raw" / "watch"
 LOG_DIR = ROOT_DIR / "logs"
 
 COUNTRY_CODE = "US"
-
-log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -230,10 +227,16 @@ if __name__ == "__main__":
         "sec-ch-ua-platform": '"macOS"',
         "sec-ch-ua-platform-version": '"15.1.0"',
     }
+
+    log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    logger = logging.getLogger(__name__)
+
     file_handler = logging.FileHandler(log_file, mode="a+")
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
 
     logger.addHandler(file_handler)
     logger.setLevel(logging.DEBUG)
+    configure_logger(logger)
+
     asyncio.run(main(), debug=True)
