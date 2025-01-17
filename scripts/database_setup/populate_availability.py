@@ -153,7 +153,9 @@ async def run(netflix_id: int, session_handler: HttpSessionHandler, dbcur: Curso
             if response.available:
                 titlepage_reachable = True
                 tg.create_task(
-                    save_response_body(response.response_body, response.saveto_path)
+                    await save_response_body(
+                        response.response_body, response.saveto_path
+                    )
                 )
 
             if response.redirected_netflix_id:
