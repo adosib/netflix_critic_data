@@ -1,8 +1,13 @@
 from typing import Any, NewType
+from pathlib import Path
 from collections import defaultdict
 
+import aiohttp
+import aiofiles
+import minify_html
 import pythonmonkey as pm
 from bs4 import BeautifulSoup
+from aiolimiter import AsyncLimiter
 
 HTMLContent = NewType("HTML", str)
 
@@ -42,6 +47,54 @@ class JobStore:
 
     def __repr__(self):
         return repr(self._data)
+
+
+class HttpSessionHandler:
+    def __init__(self, **kwargs):
+        concurrency_limit = kwargs.pop("concurrency_limit", 5)
+        connector = aiohttp.TCPConnector(
+            limit=concurrency_limit, limit_per_host=concurrency_limit
+        )
+        headers = kwargs.pop("headers", {})
+        # There's some weird timeout stuff that happens here
+        # which necessitated the need for the ClientTimeout instance:
+        # https://docs.aiohttp.org/en/stable/client_quickstart.html#aiohttp-client-timeouts
+        # https://stackoverflow.com/questions/64534844/python-asyncio-aiohttp-timeout
+        # https://github.com/aio-libs/aiohttp/issues/3203
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15)
+
+        # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
+        # but I'll be nice and limit to 5 r/s
+        self.limiter = AsyncLimiter(1, 1.0 / concurrency_limit)
+
+        self.active_sessions = []
+
+        self.noauth_session = aiohttp.ClientSession(
+            connector=connector, timeout=timeout, **kwargs
+        )
+        self.active_sessions.append(self.noauth_session)
+
+        if headers.get("Cookie", None):
+            self.authenticated_session = aiohttp.ClientSession(
+                connector=connector, timeout=timeout, headers=headers, **kwargs
+            )
+            self.active_sessions.append(self.authenticated_session)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        for session in self.active_sessions:
+            await session.close()
+
+    async def close(self):
+        for session in self.active_sessions:
+            await session.close()
+
+    async def choose_session(self, urlpath) -> aiohttp.ClientSession:
+        if "title" in urlpath:
+            return self.noauth_session
+        return self.authenticated_session
 
 
 def get_field(parsed_data: list[dict], field: str):
@@ -133,3 +186,9 @@ def _sanitize_pythonmonkey_obj(obj):
             if obj.is_integer():
                 return int(obj)
         return obj
+
+
+async def save_response_body(response_body: HTMLContent, saveto_path: Path):
+    async with aiofiles.open(str(saveto_path), "w+") as f:
+        minified = minify_html.minify(response_body, minify_css=True, minify_js=True)
+        await f.write(minified)

@@ -6,17 +6,15 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 
 import aiohttp
-import psycopg
-import aiofiles
 from bs4 import BeautifulSoup
-from psycopg import sql
+from common import HttpSessionHandler, save_response_body
+from psycopg import Cursor, Connection, sql
 from tenacity import (
     retry,
     wait_exponential,
     stop_after_attempt,
     retry_if_exception_type,
 )
-from aiolimiter import AsyncLimiter
 
 THIS_DIR = Path(__file__).parent
 ROOT_DIR, *_ = [
@@ -55,55 +53,7 @@ class NetflixResponse:
         return str(saveto_dir / f"{self.netflix_id}.html")
 
 
-class SessionHandler:
-    def __init__(self, **kwargs):
-        concurrency_limit = kwargs.pop("concurrency_limit", 5)
-        connector = aiohttp.TCPConnector(
-            limit=concurrency_limit, limit_per_host=concurrency_limit
-        )
-        headers = kwargs.pop("headers", {})
-        # There's some weird timeout stuff that happens here
-        # which necessitated the need for the ClientTimeout instance:
-        # https://docs.aiohttp.org/en/stable/client_quickstart.html#aiohttp-client-timeouts
-        # https://stackoverflow.com/questions/64534844/python-asyncio-aiohttp-timeout
-        # https://github.com/aio-libs/aiohttp/issues/3203
-        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15)
-
-        # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
-        # but I'll be nice and limit to 5 r/s
-        self.limiter = AsyncLimiter(1, 1.0 / concurrency_limit)
-
-        self.active_sessions = []
-
-        self.noauth_session = aiohttp.ClientSession(
-            connector=connector, timeout=timeout, **kwargs
-        )
-        self.active_sessions.append(self.noauth_session)
-
-        if headers.get("Cookie", None):
-            self.authenticated_session = aiohttp.ClientSession(
-                connector=connector, timeout=timeout, headers=headers, **kwargs
-            )
-            self.active_sessions.append(self.authenticated_session)
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        for session in self.active_sessions:
-            await session.close()
-
-    async def close(self):
-        for session in self.active_sessions:
-            await session.close()
-
-    async def choose_session(self, urlpath) -> aiohttp.ClientSession:
-        if "title" in urlpath:
-            return self.noauth_session
-        return self.authenticated_session
-
-
-async def update_database(cursor: psycopg.Cursor, record: dict):
+async def update_database(cursor: Cursor, record: dict):
     upsert_availability_query = sql.SQL(
         "INSERT INTO availability (netflix_id, redirected_netflix_id, country, available, titlepage_reachable, checked_at) "
         "VALUES (%(netflix_id)s, %(redirected_netflix_id)s, %(country)s, %(available)s, %(titlepage_reachable)s, %(checked_at)s) "
@@ -112,11 +62,6 @@ async def update_database(cursor: psycopg.Cursor, record: dict):
     )
     logger.info(f"Now executing: {upsert_availability_query.as_string()}")
     cursor.execute(upsert_availability_query, record)
-
-
-async def save_response_body(response_body: str, filepath: Path):
-    async with aiofiles.open(str(filepath), "w+") as f:
-        await f.write(response_body)
 
 
 async def response_indicates_available_title(response: aiohttp.ClientResponse):
@@ -171,7 +116,7 @@ async def get_netflix(
         )
 
 
-async def run(netflix_id: int, session_handler: SessionHandler, dbcur: psycopg.Cursor):
+async def run(netflix_id: int, session_handler: HttpSessionHandler, dbcur: Cursor):
     title_id = netflix_id
     responses: list[NetflixResponse] = []
     async with session_handler.limiter:
@@ -230,9 +175,7 @@ async def main():
     background_tasks = set()
     responses = []
 
-    with psycopg.Connection.connect(
-        "dbname=postgres user=postgres", autocommit=True
-    ) as dbconn:
+    with Connection.connect("dbname=postgres user=postgres", autocommit=True) as dbconn:
         with dbconn.cursor() as dbcur:
             dbcur.execute(
                 """
@@ -248,7 +191,9 @@ async def main():
                 {"country": COUNTRY_CODE},
             )
 
-            async with SessionHandler(headers={**HEADERS, **COOKIE}) as session_handler:
+            async with HttpSessionHandler(
+                headers={**HEADERS, **COOKIE}
+            ) as session_handler:
                 for netflix_id, *_ in dbcur:
                     task = asyncio.create_task(
                         run(netflix_id, session_handler, dbcur),
