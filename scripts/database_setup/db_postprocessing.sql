@@ -22,7 +22,7 @@ from (
             replace(
                 json_extract_element_from_metadata(metadata, 'moreDetails') -> 'data' ->> 'type',
                 'show',
-                'series'
+                'tv series'
             ) as extracted_content_type
         from titles
         where metadata is not null
@@ -60,7 +60,7 @@ with insertable as (
             -> 'data'
             ->> 'type',
             'show',
-            'series'
+            'tv series'
         )::public.content_type as content_type,
         min(t1.release_year) as release_year,
         min(t1.runtime) as runtime

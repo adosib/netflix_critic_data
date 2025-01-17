@@ -1,6 +1,6 @@
 CREATE TYPE content_type AS ENUM (
     'movie',
-    'series'
+    'tv series'
 );
 
 CREATE TABLE public.titles (
@@ -19,7 +19,7 @@ CREATE TABLE public.titles (
 
 CREATE TABLE public.availability (
     id serial PRIMARY KEY,
-    netflix_id integer REFERENCES titles (netflix_id),
+    netflix_id integer REFERENCES titles (netflix_id) ON DELETE CASCADE,
     redirected_netflix_id integer,
     country char(2),
     available boolean,
@@ -32,7 +32,7 @@ CREATE TABLE public.availability (
 
 CREATE TABLE public.ratings (
     id serial PRIMARY KEY,
-    netflix_id integer REFERENCES titles (netflix_id),
+    netflix_id integer REFERENCES titles (netflix_id) ON DELETE CASCADE,
     vendor varchar(32),
     url text,
     rating smallint,
@@ -54,7 +54,7 @@ WHERE
 UPDATE
     titles
 SET
-    content_type = 'series'
+    content_type = 'tv series'
 WHERE
     content_type IS null;
 
