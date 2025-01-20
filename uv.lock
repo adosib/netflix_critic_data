@@ -347,6 +347,19 @@ wheels = [
 ]
 
 [[package]]
+name = "minify-html"
+version = "0.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/8a/c921cd4b3e364c871be418c1694b315e5fa823eb8180d89f99d9a61aa8fe/minify_html-0.15.0.tar.gz", hash = "sha256:cf4c36b6f9af3b0901bd2a0a29db3b09c0cdf0c38d3dde28e6835bce0f605d37", size = 96948 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/a7/b0a1c3a3c10c00b28732b1d8e54fbe2e0d7f586397592d35952ca7ec156c/minify_html-0.15.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:2a9aef71b24c3d38c6bece2db3bf707443894958b01f1c27d3a6459ba4200e59", size = 2307989 },
+    { url = "https://files.pythonhosted.org/packages/09/df/d011e38521551ddab4d31d389691aa5d3eaf19cfbab993a9d366032a6608/minify_html-0.15.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:70251bd7174b62c91333110301b27000b547aa2cc06d4fe6ba6c3f11612eecc9", size = 2164108 },
+    { url = "https://files.pythonhosted.org/packages/0f/5a/9b53f0215237f1693242cd6fbafe73dd88050454f2715b6d5123ca444da0/minify_html-0.15.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1056819ea46e9080db6fed678d03511c7e94c2a615e72df82190ea898dc82609", size = 2240974 },
+    { url = "https://files.pythonhosted.org/packages/a0/ae/786cd6775d8891fe2a4b5774753a00c95fd6ec3013086c92c2970c4371dc/minify_html-0.15.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ea315ad6ac33d7463fac3f313bba8c8d9a55f4811971c203eed931203047e5c8", size = 2395919 },
+    { url = "https://files.pythonhosted.org/packages/90/f0/23ea4cbaff3f83c4f8802bfda2aebbdd02fb84595567aeb86be84f6aa055/minify_html-0.15.0-cp312-none-win_amd64.whl", hash = "sha256:01ea40dc5ae073c47024f02758d5e18e55d853265eb9c099040a6c00ab0abb99", size = 2382578 },
+]
+
+[[package]]
 name = "more-itertools"
 version = "10.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -404,7 +417,9 @@ dependencies = [
     { name = "aiolimiter" },
     { name = "apify-client" },
     { name = "beautifulsoup4" },
+    { name = "minify-html" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pythonmonkey" },
     { name = "tenacity" },
 ]
 
@@ -415,9 +430,17 @@ requires-dist = [
     { name = "aiolimiter", specifier = ">=1.2.0" },
     { name = "apify-client", specifier = ">=1.8.1" },
     { name = "beautifulsoup4", specifier = ">=4.12.3" },
+    { name = "minify-html", specifier = ">=0.15.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.3" },
+    { name = "pythonmonkey", specifier = ">=1.1.0" },
     { name = "tenacity", specifier = ">=9.0.0" },
 ]
+
+[[package]]
+name = "pminit"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/c3/d41343d930564b9a65af3dff7cda79f4b4e0f0be2767d5abc0db218a18bd/pminit-1.1.0.tar.gz", hash = "sha256:8983aa369cafd751971461369beb133af1717493223ef65361ea53153ec48713", size = 7512 }
 
 [[package]]
 name = "propcache"
@@ -549,6 +572,38 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1d/b2/31537cf4b1ca988837256c910a668b553fceb8f069bedc4b1c826024b52c/pycparser-2.22.tar.gz", hash = "sha256:491c8be9c040f5390f5bf44a5b07752bd07f56edf992381b05c701439eec10f6", size = 172736 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/13/a3/a812df4e2dd5696d1f351d58b8fe16a405b234ad2886a0dab9183fb78109/pycparser-2.22-py3-none-any.whl", hash = "sha256:c3702b6d3dd8c7abc1afa565d7e63d53a1d0bd86cdc24edd75470f4de499cfcc", size = 117552 },
+]
+
+[[package]]
+name = "pyreadline3"
+version = "3.5.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/49/4cea918a08f02817aabae639e3d0ac046fef9f9180518a3ad394e22da148/pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7", size = 99839 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/dc/491b7661614ab97483abf2056be1deee4dc2490ecbf7bff9ab5cdbac86e1/pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6", size = 83178 },
+]
+
+[[package]]
+name = "pythonmonkey"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp", extra = ["speedups"] },
+    { name = "pminit" },
+    { name = "pyreadline3", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4a/cc/d91b0770685c79680cdd7ff0b3a9358d8467aaa0cb4a20eeb30b3767cd48/pythonmonkey-1.1.0.tar.gz", hash = "sha256:71f752eba7aeeb8eb51d25ce357257285110bcffdb4c3639108f7b01bbf8f779", size = 308076 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/a0/a148e6fee4e42e65e9911ed3b18d331e5ffa9e100cc89587f687b271c26d/pythonmonkey-1.1.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:7a1af15cb56a8ab239770a251a68fbb1fbdc86ed2c31edf705c7da3bcc468365", size = 14321159 },
+    { url = "https://files.pythonhosted.org/packages/75/1f/a7a3e4f5ca02766d039b0d6244ba6207a0913f06f26ae4b9402b872d4361/pythonmonkey-1.1.0-cp312-cp312-macosx_11_0_x86_64.whl", hash = "sha256:43a625903e3506cab54f331472f16897a2338c3d977ac3cde712e54388e84e44", size = 14952660 },
+    { url = "https://files.pythonhosted.org/packages/7e/c0/a8ab286af62443b51586c3f7df892b854f965a6688594134ae1e4a3c401d/pythonmonkey-1.1.0-cp312-cp312-manylinux_2_31_x86_64.whl", hash = "sha256:2bd3b71e7d6aa0f3b00105eb04dee0c5f124cfa1b2feb817139fd1b39b80e8ca", size = 21649707 },
+    { url = "https://files.pythonhosted.org/packages/2b/b7/801a19e298adf3ecb228791d8f4657c80ba40e62ad47e6c05b49c36d97a4/pythonmonkey-1.1.0-cp312-cp312-manylinux_2_35_aarch64.whl", hash = "sha256:fe3d48a84d3b9aee09bb6a096953e15702d959f8b91c4b46c26091478de05662", size = 19112311 },
+    { url = "https://files.pythonhosted.org/packages/e6/fe/0b638ed8047fbd8fd3a6981f7d930c1f47f183aea96dd2cdbb5a0e4e282e/pythonmonkey-1.1.0-cp312-cp312-win_amd64.whl", hash = "sha256:1e570e2e7a5900b4603d0939a564c926e682e90d7b532bf76286e9772a87f012", size = 12390500 },
+    { url = "https://files.pythonhosted.org/packages/4a/87/4c37832d9544b12b1ee26f7b287d2ecbcdc7206057df569bd0d8f13026b0/pythonmonkey-1.1.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:d4af188936ae83aa18379f2135b1e0ec81821dcb4b2c1af8403a0f56fc0c3251", size = 14321252 },
+    { url = "https://files.pythonhosted.org/packages/7a/50/f0197d74636c5a7457aa3d9028926dd38a2602935a00626b3bdf892a97cd/pythonmonkey-1.1.0-cp313-cp313-macosx_11_0_x86_64.whl", hash = "sha256:b0db36296fc2aaa899cc1f16d3c8558be22172cc3ec31b1bf2ad346866e29097", size = 14952922 },
+    { url = "https://files.pythonhosted.org/packages/2a/8c/71f6581c178882bb9fadada4cf401ecda49f6e76c3c3ae719aa81d326169/pythonmonkey-1.1.0-cp313-cp313-manylinux_2_31_x86_64.whl", hash = "sha256:3027b1cdd21dbd9941d32d20698f6c996aea9010b4565773854ab4ac9b074578", size = 21618400 },
+    { url = "https://files.pythonhosted.org/packages/3f/79/e8fa69d20032869749b0747294050bc0043d2b8d1bcd6168fc712fd17aba/pythonmonkey-1.1.0-cp313-cp313-manylinux_2_35_aarch64.whl", hash = "sha256:8b6ccf89d22397a67c6e994cbf2f9a11200947af034dcede7c4abfbafbe5e988", size = 19112187 },
+    { url = "https://files.pythonhosted.org/packages/ad/c0/9888d19411980e15394c6833cec3fd4aec3e1ec8f1cdb26630404cb2cb21/pythonmonkey-1.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:759279e90d92e5069ecf33d9b0dcc6d1e2b67ebf3585fb40aa9aade462ecde26", size = 12390635 },
 ]
 
 [[package]]
