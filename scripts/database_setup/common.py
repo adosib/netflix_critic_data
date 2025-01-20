@@ -3,6 +3,7 @@ import re
 import random
 import asyncio
 import logging
+import warnings
 from typing import Any, NewType, Callable, Optional
 from pathlib import Path
 from datetime import datetime, timezone
@@ -23,6 +24,18 @@ SCRIPTS_DIR = THIS_DIR / "utils"
 # See https://docs.apify.com/api/client/python/docs
 # Initialize the ApifyClient with your API token
 APIFY_CLIENT = ApifyClientAsync(os.getenv("APIFY_TOKEN"))
+APIFY_ACTOR_ID = os.getenv("APIFY_ACTOR_ID", "MpRbnNmVAoj5RC1Ma")
+if APIFY_CLIENT is None:
+    warnings.warn(
+        "The environment variable 'APIFY_TOKEN' is not set. "
+        "Titles that are not found in the database will not be looked up "
+        "unless you provide your own SERP scraping function "
+        "(see environment variables section in docs).",
+        UserWarning,
+    )
+else:
+    APIFY_ACTOR = APIFY_CLIENT.actor(APIFY_ACTOR_ID)
+    APIFY_ACTOR_RUN_INPUT = ...
 
 LOGGER = logging.getLogger(__name__)
 
@@ -222,6 +235,7 @@ def extract_netflix_react_context(html: HTMLContent) -> list[dict]:
                 )
             except (KeyError, AttributeError, pm.SpiderMonkeyError) as e:
                 raise ContextExtractionError("Error extracting reactContext: ", e)
+    return []
 
 
 def _find_all_script_elements(html: HTMLContent):
@@ -260,15 +274,21 @@ def _sanitize_pythonmonkey_obj(obj):
 
 
 async def save_response_body(response_body: HTMLContent, saveto_path: Path):
+    if not response_body:
+        return
     async with aiofiles.open(str(saveto_path), "w+") as f:
         minified = minify_html.minify(response_body, minify_css=True, minify_js=True)
         await f.write(minified)
 
 
 async def get_serp_html(netflix_id, title, content_type, release_year):
+    if APIFY_CLIENT is None:
+        return ""
+
     queries = _build_query(title, content_type, release_year, permute=True)
     start_url, *alt_search_paths = _build_google_urls(queries)
-    run: dict = await APIFY_CLIENT.actor("MpRbnNmVAoj5RC1Ma").call(
+
+    run: dict = await APIFY_ACTOR.call(
         # https://docs.apify.com/api/client/python/reference/class/ActorClientAsync#call
         run_input={  # https://apify.com/apify/playwright-scraper/input-schema
             "browserLog": False,
@@ -302,6 +322,7 @@ async def get_serp_html(netflix_id, title, content_type, release_year):
         timeout_secs=120,
         wait_secs=120,
     )
+
     retry_delay = 0.1
     for _ in range(5):
         try:
@@ -339,8 +360,8 @@ def _build_query(title, content_type, release_year, permute=False) -> str | list
     if permute:
         # Some alternative searches to consider
         # in case the Google user reviews snippet isn't present for the initial query
-        alt1 = f"{title} ({content_type}) reviews"
-        alt2 = f"{title} ({content_type})"
+        alt1 = f"{title} ({content_type})"
+        alt2 = f"{title} ({content_type}) reviews"
         alt3 = f"{title} ({release_year})"
         return [query, alt1, alt2, alt3]
     return query
@@ -370,7 +391,7 @@ async def extract_reviews_from_serp(html):
     # TODO this isn't super robust e.g. for the Netflix title with ID 80107103,
     # the first Google search term that yielded results was:
     # "ONE PIECE" tv series (1999.0)
-    # but the IMDb rating wasn't captured though present on the page.
+    # but the IMDb rating wasn't captured (though present on the page).
     # Granted, querying with the release year as a float was a bug that's been resolved,
     # but the code should be more robust.
     reviews = soup.select("[data-attrid$=reviews], [data-attrid$=thumbs_up]")
