@@ -4,7 +4,12 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-from common import get_field, configure_logger, extract_netflix_react_context
+from common import (
+    ContextExtractionError,
+    get_field,
+    configure_logger,
+    extract_netflix_react_context,
+)
 from psycopg import Cursor, Connection, sql
 
 THIS_DIR = Path(__file__).parent
@@ -38,10 +43,11 @@ async def update_db(
 async def run(dbcur, netflix_id):
     html_file_path = ROOT_DIR / "data" / "raw" / "title" / f"{netflix_id}.html"
     try:
-        metadata = json.loads(extract_netflix_react_context(html_file_path))
+        with open(html_file_path) as f:
+            metadata = extract_netflix_react_context(f.read())
         await update_db(dbcur, netflix_id, metadata)
-    except json.decoder.JSONDecodeError:
-        logger.error(f"JSONDecodeError for {html_file_path}")
+    except ContextExtractionError as e:
+        logger.error(e)
 
 
 async def main():
