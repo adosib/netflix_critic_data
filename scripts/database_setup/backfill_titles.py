@@ -1,4 +1,7 @@
+import os
+import sys
 import json
+import pprint
 import asyncio
 import logging
 from pathlib import Path
@@ -36,7 +39,15 @@ async def update_db(
         values=sql.SQL(", ").join((release_year, runtime, json.dumps(parsed_data))),
         netflix_id=netflix_id,
     )
-    logger.info(f"Now executing: {update_titles_query.as_string()}")
+
+    formatted_msg = pprint.pformat(
+        update_titles_query.as_string(), compact=True, width=80
+    )
+    truncated_msg = (
+        formatted_msg[:255] + "..." if len(formatted_msg) > 255 else formatted_msg
+    )
+
+    logger.info(f"Now executing: {truncated_msg}")
     dbcur.execute(update_titles_query)
 
 
@@ -51,7 +62,7 @@ async def run(dbcur, netflix_id):
 
 
 async def main():
-    with Connection.connect("dbname=postgres user=postgres", autocommit=True) as dbconn:
+    with Connection.connect(conn_string, autocommit=True) as dbconn:
         with dbconn.cursor() as dbcur:
             # Gather reachable titles lacking metadata
             dbcur.execute("""
@@ -61,7 +72,8 @@ async def main():
                     ON availability.netflix_id = titles.netflix_id
                     AND availability.country = 'US'
                 WHERE availability.titlepage_reachable
-                  AND titles.metadata IS NULL;
+                  AND titles.metadata IS NULL
+                LIMIT 10;
             """)
             async with asyncio.TaskGroup() as tg:
                 for netflix_id, *_ in dbcur:
@@ -73,14 +85,29 @@ async def main():
 
 if __name__ == "__main__":
     filename = Path(__file__).stem
-    log_file = LOG_DIR / f"{filename}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
     logger = logging.getLogger(__name__)
+
     file_handler = logging.FileHandler(log_file, mode="a+")
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
 
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+
     logger.addHandler(file_handler)
+    logger.addHandler(stdout_handler)
     logger.setLevel(logging.DEBUG)
     configure_logger(logger)
+
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    dbname = os.getenv("POSTGRES_DB", "postgres")
+    user = os.getenv("POSTGRES_USER", "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "")
+
+    conn_string = (
+        f"dbname={dbname} user={user} password={password} host={host} port={port}"
+    )
 
     asyncio.run(main())

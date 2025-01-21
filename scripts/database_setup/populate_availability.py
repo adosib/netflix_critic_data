@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import logging
 from pathlib import Path
@@ -57,7 +58,7 @@ async def update_database(cursor: Cursor, record: dict):
         "ON CONFLICT (netflix_id, country) DO UPDATE "
         "SET redirected_netflix_id = EXCLUDED.redirected_netflix_id, available = EXCLUDED.available, titlepage_reachable = EXCLUDED.titlepage_reachable, checked_at = EXCLUDED.checked_at"
     )
-    logger.info(f"Now executing: {upsert_availability_query.as_string()}")
+    logger.info(f"Now executing public.availability UPSERT with values: {record}")
     cursor.execute(upsert_availability_query, record)
 
 
@@ -76,8 +77,7 @@ async def response_indicates_available_title(response: aiohttp.ClientResponse):
 
 
 def _retry_log(retry_state):
-    logger.log(
-        logger.WARNING,
+    logger.warning(
         "Retrying %s(%s): attempt %s",
         retry_state.fn,
         retry_state.args,
@@ -150,9 +150,7 @@ async def run(netflix_id: int, session_handler: HttpSessionHandler, dbcur: Curso
             if response.available:
                 titlepage_reachable = True
                 tg.create_task(
-                    await save_response_body(
-                        response.response_body, response.saveto_path
-                    )
+                    save_response_body(response.response_body, response.saveto_path)
                 )
 
             if response.redirected_netflix_id:
@@ -174,7 +172,7 @@ async def main():
     background_tasks = set()
     responses = []
 
-    with Connection.connect("dbname=postgres user=postgres", autocommit=True) as dbconn:
+    with Connection.connect(conn_string, autocommit=True) as dbconn:
         with dbconn.cursor() as dbcur:
             dbcur.execute(
                 """
@@ -185,7 +183,7 @@ async def main():
                     AND country = %(country)s
                 WHERE availability.netflix_id IS NULL 
                    OR availability.checked_at + INTERVAL '7 days' < current_date
-                ;
+                LIMIT 10;
                 """,
                 {"country": COUNTRY_CODE},
             )
@@ -235,8 +233,22 @@ if __name__ == "__main__":
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
 
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+
     logger.addHandler(file_handler)
+    logger.addHandler(stdout_handler)
     logger.setLevel(logging.DEBUG)
     configure_logger(logger)
+
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    dbname = os.getenv("POSTGRES_DB", "postgres")
+    user = os.getenv("POSTGRES_USER", "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "")
+
+    conn_string = (
+        f"dbname={dbname} user={user} password={password} host={host} port={port}"
+    )
 
     asyncio.run(main(), debug=True)
