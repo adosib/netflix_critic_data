@@ -1,58 +1,62 @@
 import os
 import re
-import random
+import json
 import asyncio
 import logging
 import warnings
 from typing import Any, NewType, Callable, Optional
 from pathlib import Path
 from datetime import datetime, timezone
+from itertools import cycle
 from collections import defaultdict
+from dataclasses import dataclass
 from urllib.parse import urlencode
 
 import aiohttp
 import aiofiles
 import minify_html
 import pythonmonkey as pm
-from bs4 import BeautifulSoup
+from bs4 import Tag, BeautifulSoup
 from aiolimiter import AsyncLimiter
-from apify_client import ApifyClientAsync
 
-THIS_DIR = Path(__file__).parent
-SCRIPTS_DIR = THIS_DIR / "utils"
-
-# See https://docs.apify.com/api/client/python/docs
-# Initialize the ApifyClient with your API token
-APIFY_CLIENT = ApifyClientAsync(os.getenv("APIFY_TOKEN"))
-APIFY_ACTOR_ID = os.getenv("APIFY_ACTOR_ID", "MpRbnNmVAoj5RC1Ma")
-if APIFY_CLIENT is None:
+BRD_API_URL = "https://api.brightdata.com/request"
+BRD_ZONE = os.getenv("BRD_ZONE", "serp_api1")
+BRD_AUTH_TOKEN = os.getenv("BRD_AUTH_TOKEN")
+if BRD_AUTH_TOKEN is None:
     warnings.warn(
-        "The environment variable 'APIFY_TOKEN' is not set. "
+        "The environment variable 'BRD_AUTH_TOKEN' is not set. "
         "Titles that are not found in the database will not be looked up "
-        "unless you provide your own SERP scraping function "
         "(see environment variables section in docs).",
         UserWarning,
     )
-else:
-    APIFY_ACTOR = APIFY_CLIENT.actor(APIFY_ACTOR_ID)
-    APIFY_ACTOR_RUN_INPUT = ...
 
 LOGGER = logging.getLogger(__name__)
-
-with (
-    open(SCRIPTS_DIR / "playwright-pagefn.js", "r") as f1,
-    open(SCRIPTS_DIR / "playwright-prenav.js", "r") as f2,
-    open(SCRIPTS_DIR / "playwright-postnav.js", "r") as f3,
-):
-    PLAYWRIGHT_PAGEFN = f1.read()
-    PLAYWRIGHT_PRENAV_HOOK = f2.read()
-    PLAYWRIGHT_POSTNAV_HOOK = f3.read()
 
 HTMLContent = NewType("HTML", str)
 
 
 class ContextExtractionError(Exception):
     pass
+
+
+class SessionLimitError(Exception):
+    pass
+
+
+@dataclass
+class Review:
+    netflix_id: int
+    url: str
+    vendor: str
+    rating: int
+    ratings_count: int
+    checked_at: datetime = datetime.now(timezone.utc)
+
+
+@dataclass
+class SERPResponse:
+    html: HTMLContent
+    ratings: list[Review]
 
 
 class JobStore:
@@ -89,51 +93,106 @@ class JobStore:
 
 
 class HttpSessionHandler:
-    def __init__(self, **kwargs):
+    def __init__(self, base_url=None, session_limit=5, max_rps=5):
+        self.base_url = base_url
+        self.session_limit = session_limit
+        self.active_sessions = []
+        self.limiter = AsyncLimiter(1, 1.0 / max_rps)
+
+    def start_session(self, cookie_auth=False, **kwargs) -> aiohttp.ClientSession:
+        if len(self.active_sessions) >= self.session_limit:
+            raise SessionLimitError(
+                "The maximum allowable number of active sessions has been reached."
+            )
+
         concurrency_limit = kwargs.pop("concurrency_limit", 5)
-        connector = aiohttp.TCPConnector(
-            limit=concurrency_limit, limit_per_host=concurrency_limit
+        connector = kwargs.pop(
+            "connector",
+            aiohttp.TCPConnector(
+                limit=concurrency_limit, limit_per_host=concurrency_limit
+            ),
         )
-        headers = kwargs.pop("headers", {})
         # There's some weird timeout stuff that happens here
         # which necessitated the need for the ClientTimeout instance:
         # https://docs.aiohttp.org/en/stable/client_quickstart.html#aiohttp-client-timeouts
         # https://stackoverflow.com/questions/64534844/python-asyncio-aiohttp-timeout
         # https://github.com/aio-libs/aiohttp/issues/3203
-        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15)
-
-        # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
-        # but I'll be nice and limit to 5 r/s
-        self.limiter = AsyncLimiter(1, 1.0 / concurrency_limit)
-
-        self.active_sessions = []
-
-        self.noauth_session = aiohttp.ClientSession(
-            connector=connector, timeout=timeout, **kwargs
+        timeout = kwargs.pop(
+            "timeout", aiohttp.ClientTimeout(total=None, sock_connect=15)
         )
-        self.active_sessions.append(self.noauth_session)
 
-        if headers.get("Cookie", None):
-            self.authenticated_session = aiohttp.ClientSession(
-                connector=connector, timeout=timeout, headers=headers, **kwargs
-            )
-            self.active_sessions.append(self.authenticated_session)
+        headers = kwargs.pop("headers", {})
+        if not cookie_auth:
+            # If we're not authenticating with cookies, remove any present cookies
+            headers.pop("Cookie", None)
+
+        session = aiohttp.ClientSession(
+            self.base_url,
+            connector=connector,
+            headers=headers,
+            timeout=timeout,
+            **kwargs,
+        )
+
+        self.active_sessions.append(session)
+        return session
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
-        for session in self.active_sessions:
-            await session.close()
+        await self.close()
 
     async def close(self):
-        for session in self.active_sessions:
+        while self.active_sessions:
+            session = self.active_sessions.pop()
             await session.close()
 
-    async def choose_session(self, urlpath) -> aiohttp.ClientSession:
+
+class NetflixSessionHandler(HttpSessionHandler):
+    def __init__(
+        self, base_url="https://www.netflix.com/", session_limit=2, max_rps=5, **kwargs
+    ):
+        # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
+        # but I'll be nice and limit to 5 r/s
+        super().__init__(
+            base_url=base_url, session_limit=session_limit, max_rps=max_rps
+        )
+        self.noauth_session = self.start_session(**kwargs)
+        self.authenticated_session = self.start_session(cookie_auth=True, **kwargs)
+
+    def choose_session(self, urlpath) -> aiohttp.ClientSession:
         if "title" in urlpath:
             return self.noauth_session
         return self.authenticated_session
+
+
+class BrightDataSessionHandler(HttpSessionHandler):
+    def __init__(self, session_limit=10, max_rps=10, **kwargs):
+        super().__init__(session_limit=session_limit, max_rps=max_rps)
+        self._session_iterator = None
+        for _ in range(session_limit):
+            self.start_session(**kwargs)
+
+    def _update_session_iterator(self):
+        """Reinitialize the cycle iterator based on the updated active_sessions."""
+        self._session_iterator = cycle(self.active_sessions)
+
+    def start_session(self, cookie_auth=False, **kwargs):
+        session = super().start_session(cookie_auth, **kwargs)
+        self._update_session_iterator()
+        return session
+
+    def choose_session(self):
+        if not self.active_sessions:
+            raise ValueError("No active sessions available.")
+        if self._session_iterator is None:
+            self._update_session_iterator()
+        return next(self._session_iterator)
+
+    async def close(self):
+        await super().close()
+        self._update_session_iterator()
 
 
 class RatingPattern:
@@ -181,7 +240,7 @@ RATING_PATTERNS = [
 ]
 
 
-def get_field(react_context: list[dict], field: str):
+def get_field(react_context: list[dict], field: str) -> str | int | None:
     fields = {}
     hero_data = _parse_hero_data(react_context)
     fields["title"] = hero_data.get("title")
@@ -201,7 +260,7 @@ def _parse_hero_data(react_context: list[dict]) -> dict:
         return {}
 
 
-def _get_release_year(react_context: list[dict], release_year: int):
+def _get_release_year(react_context: list[dict], release_year: int) -> int:
     for item in react_context:
         if item["type"] == "seasonsAndEpisodes":
             try:
@@ -214,7 +273,7 @@ def _get_release_year(react_context: list[dict], release_year: int):
     return release_year
 
 
-def _get_content_type(react_context: list[dict]):
+def _get_content_type(react_context: list[dict]) -> str | None:
     for item in react_context:
         if item["type"] == "moreDetails":
             return item["data"]["type"].replace("show", "tv series")
@@ -238,7 +297,7 @@ def extract_netflix_react_context(html: HTMLContent) -> list[dict]:
     return []
 
 
-def _find_all_script_elements(html: HTMLContent):
+def _find_all_script_elements(html: HTMLContent) -> list[dict]:
     """
     Finds and returns all <script> elements in the provided HTML string.
 
@@ -259,7 +318,7 @@ def _find_all_script_elements(html: HTMLContent):
     return scripts_info
 
 
-def _sanitize_pythonmonkey_obj(obj):
+def _sanitize_pythonmonkey_obj(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _sanitize_pythonmonkey_obj(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -273,7 +332,7 @@ def _sanitize_pythonmonkey_obj(obj):
         return obj
 
 
-async def save_response_body(response_body: HTMLContent, saveto_path: Path):
+async def save_response_body(response_body: HTMLContent, saveto_path: Path) -> None:
     if not response_body:
         return
     async with aiofiles.open(str(saveto_path), "w+") as f:
@@ -281,81 +340,63 @@ async def save_response_body(response_body: HTMLContent, saveto_path: Path):
         await f.write(minified)
 
 
-async def get_serp_html(netflix_id, title, content_type, release_year):
-    if APIFY_CLIENT is None:
-        return ""
+async def get_serp_html(
+    netflix_id: int,
+    title: str,
+    content_type: str,
+    release_year: int,
+    session: aiohttp.ClientSession = None,
+) -> SERPResponse:
+    if BRD_AUTH_TOKEN is None:
+        return SERPResponse("", [])
 
     queries = _build_query(title, content_type, release_year, permute=True)
-    start_url, *alt_search_paths = _build_google_urls(queries)
 
-    run: dict = await APIFY_ACTOR.call(
-        # https://docs.apify.com/api/client/python/reference/class/ActorClientAsync#call
-        run_input={  # https://apify.com/apify/playwright-scraper/input-schema
-            "browserLog": False,
-            "closeCookieModals": False,
-            "customData": {
-                "alt_search_paths": alt_search_paths,
-                "netflix_id": netflix_id,
-            },
-            "debugLog": True,
-            "downloadCss": True,
-            "downloadMedia": True,
-            "headless": True,
-            "ignoreCorsAndCsp": False,
-            "ignoreSslErrors": False,
-            "keepUrlFragments": False,
-            "launcher": "chromium",
-            "maxCrawlingDepth": 1,
-            "pageFunction": PLAYWRIGHT_PAGEFN,
-            "postNavigationHooks": PLAYWRIGHT_POSTNAV_HOOK,
-            "preNavigationHooks": PLAYWRIGHT_PRENAV_HOOK,
-            "proxyConfiguration": {
-                "useApifyProxy": True,
-                "apifyProxyGroups": [],
-                "apifyProxyCountry": "US",
-            },
-            "startUrls": [{"url": start_url, "method": "GET"}],
-            "useChrome": False,
-            "waitUntil": "load",
-        },
-        memory_mbytes=1024,
-        timeout_secs=120,
-        wait_secs=120,
-    )
+    html_content = ""
+    ratings_list = []
+    ct_ratings = 0
 
-    retry_delay = 0.1
-    for _ in range(5):
+    for url in _build_google_urls(queries):
+        # Kind of have to be sync about this... don't want to make more queries than necessary
+        async with session.post(
+            BRD_API_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {BRD_AUTH_TOKEN}",
+            },
+            json={
+                "zone": BRD_ZONE,
+                "url": url,
+                "format": "raw",
+            },
+        ) as response:
+            json_body = await response.json()
+
         try:
-            dataset = await _get_dataset(run)
-            html = dataset["html"]
-            return html
-        except (IndexError, KeyError, TypeError):
-            await asyncio.sleep(retry_delay)
-            retry_delay *= 2  # Double the delay for the next attempt
-            retry_delay += random.uniform(0, 1)  # Add jitter
-    return ""  # TODO
+            html = json_body["html"]
+            ratings = await extract_reviews_from_serp(netflix_id, html)
+
+            if (len_ := len(ratings)) > ct_ratings:
+                # If we don't have Google user reviews, we can default to returning the page
+                # with the most captured review elements
+                ct_ratings = len_
+                html_content = html
+                ratings_list = ratings
+
+            for rating in ratings:
+                if rating.vendor == "Google users":
+                    return SERPResponse(html, ratings)
+
+        except json.JSONDecodeError as e:
+            LOGGER.exception(e)
+            continue
+
+    return SERPResponse(html_content, ratings_list)
 
 
-async def _get_dataset(run):
-    await APIFY_CLIENT.run(run["id"]).wait_for_finish()  # TODO is this necessary?
-
-    dataset_items = await APIFY_CLIENT.dataset(run["defaultDatasetId"]).list_items()
-
-    LOGGER.info(f"Found {len(dataset_items.items)} dataset items for run {run['id']}")
-
-    # https://docs.apify.com/api/client/python/reference/class/DatasetClientAsync#list_items
-    for i, dataset in enumerate(dataset_items.items):
-        if dataset.get("googleUserRating"):
-            LOGGER.info(f"Found the Google user rating in dataset item {i}")
-            return dataset
-    # If we don't have Google user reviews, we can default to returning the dataset item
-    # with the most captured review elements
-    return max(
-        dataset_items.items, key=lambda x: len(x.get("allRatings", [])), default=None
-    )
-
-
-def _build_query(title, content_type, release_year, permute=False) -> str | list[str]:
+def _build_query(
+    title: str, content_type: str, release_year: int, permute: bool = False
+) -> str | list[str]:
     query = f'"{title}" {content_type} ({release_year})'
     if permute:
         # Some alternative searches to consider
@@ -367,26 +408,18 @@ def _build_query(title, content_type, release_year, permute=False) -> str | list
     return query
 
 
-def _build_google_urls(queries) -> list[str]:
+def _build_google_urls(queries: list[str] | str) -> list[str]:
     base_url = "https://www.google.com/search"
     if isinstance(queries, str):
         queries = [queries]
     return [
-        f"{base_url}?{urlencode({'q': query, 'hl': 'en', 'geo': 'us'})}"
+        # https://docs.brightdata.com/scraping-automation/serp-api/query-parameters/google
+        f"{base_url}?{urlencode({'q': query, 'brd_json': 'html', 'gl': 'us', 'hl': 'en', 'num': 100})}"
         for query in queries
     ]
 
 
-async def get_ratings(netflix_id, html) -> list[dict]:
-    reviews = await extract_reviews_from_serp(html)
-    checked_at = datetime.now(timezone.utc)
-    for review in reviews:
-        review["netflix_id"] = netflix_id
-        review["checked_at"] = checked_at
-    return reviews
-
-
-async def extract_reviews_from_serp(html):
+async def extract_reviews_from_serp(netflix_id: int, html: HTMLContent) -> list[Review]:
     soup = BeautifulSoup(html, "html.parser")
     # TODO this isn't super robust e.g. for the Netflix title with ID 80107103,
     # the first Google search term that yielded results was:
@@ -397,13 +430,13 @@ async def extract_reviews_from_serp(html):
     reviews = soup.select("[data-attrid$=reviews], [data-attrid$=thumbs_up]")
     reviews_list = []
     for review in reviews:
-        reviews_list.extend(await _extract_linked_reviews(review))
-        reviews_list.extend(await _extract_non_link_reviews(review))
+        reviews_list.extend(await _extract_linked_reviews(netflix_id, review))
+        reviews_list.extend(await _extract_non_link_reviews(netflix_id, review))
 
     return reviews_list
 
 
-async def _extract_linked_reviews(review):
+async def _extract_linked_reviews(netflix_id: int, review: Tag) -> list[Review]:
     """Extracts reviews from links with vendor info."""
     reviews_list = []
     a_tags = review.find_all("a", href=True)
@@ -419,30 +452,32 @@ async def _extract_linked_reviews(review):
         rating = _find_rating(inner_text_arr[0])
         if rating:
             reviews_list.append(
-                {
-                    "url": a_tag["href"],
-                    "vendor": vendor,
-                    "rating": rating,
-                    "ratings_count": None,
-                }
+                Review(
+                    netflix_id=netflix_id,
+                    url=a_tag["href"],
+                    vendor=vendor,
+                    rating=rating,
+                    ratings_count=None,
+                )
             )
 
     return reviews_list
 
 
-async def _extract_non_link_reviews(review):
+async def _extract_non_link_reviews(netflix_id: int, review: Tag) -> list[Review]:
     """Extracts Google and Audience reviews where there are no links."""
     stripped_strings = list(review.stripped_strings)
     reviews_list = []
 
     if "Google users" in stripped_strings:
         reviews_list.append(
-            {
-                "url": None,
-                "vendor": "Google users",
-                "rating": _find_rating(stripped_strings[0]),
-                "ratings_count": None,
-            }
+            Review(
+                netflix_id=netflix_id,
+                url=None,
+                vendor="Google users",
+                rating=_find_rating(stripped_strings[0]),
+                ratings_count=None,
+            )
         )
     elif "Audience rating summary" in stripped_strings:
         rating = None
@@ -459,12 +494,13 @@ async def _extract_non_link_reviews(review):
             LOGGER.error(f"Error processing audience summary: {e}")
         finally:
             reviews_list.append(
-                {
-                    "url": None,
-                    "vendor": "Audience rating summary",
-                    "rating": rating,
-                    "ratings_count": ct_ratings,
-                }
+                Review(
+                    netflix_id=netflix_id,
+                    url=None,
+                    vendor="Audience rating summary",
+                    rating=rating,
+                    ratings_count=ct_ratings,
+                )
             )
 
     return reviews_list
@@ -481,3 +517,25 @@ def _find_rating(text: str) -> Optional[int]:
 def configure_logger(external_logger):
     global LOGGER
     LOGGER = external_logger
+
+
+async def main():
+    netflix_id = 81578318
+    async with aiohttp.ClientSession() as httpsession:
+        with open(
+            f"/Users/asibalo/Documents/Dev/PetProjects/netflix_critic_data/data/raw/title/{netflix_id}.html"
+        ) as f:
+            html = f.read()
+            context = extract_netflix_react_context(html)
+            serp_response = await get_serp_html(
+                netflix_id,
+                get_field(context, "title"),
+                get_field(context, "content_type"),
+                get_field(context, "release_year"),
+                session=httpsession,
+            )
+            print(serp_response.ratings)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -33,7 +33,7 @@ CREATE TABLE public.availability (
 CREATE TABLE public.ratings (
     id serial PRIMARY KEY,
     netflix_id integer REFERENCES titles (netflix_id) ON DELETE CASCADE,
-    vendor varchar(32),
+    vendor varchar(64),
     url text,
     rating smallint,
     ratings_count integer,
@@ -42,22 +42,36 @@ CREATE TABLE public.ratings (
 );
 
 
--- WARNING: I loaded movies first, then ran the below to set content_type = 'movie',
-UPDATE
-    titles
-SET
-    content_type = 'movie'
-WHERE
-    content_type IS null;
+CREATE TEMP TABLE tmp_titles (
+    title varchar(256) NULL,
+    netflix_id integer NULL
+);
 
--- then I loaded series and ran the block below
-UPDATE
-    titles
-SET
-    content_type = 'tv series'
-WHERE
-    content_type IS null;
+COPY tmp_titles (title, netflix_id)
+FROM '/seeds/movies.csv'
+DELIMITER ',' CSV;
 
+INSERT INTO titles (title, netflix_id, content_type)
+SELECT
+    title,
+    netflix_id,
+    'movie'::content_type
+FROM tmp_titles;
+
+TRUNCATE tmp_titles;
+
+COPY tmp_titles (title, netflix_id)
+FROM '/seeds/series.csv'
+DELIMITER ',' CSV;
+
+INSERT INTO titles (title, netflix_id, content_type)
+SELECT
+    title,
+    netflix_id,
+    'tv series'::content_type
+FROM tmp_titles;
+
+DROP TABLE tmp_titles;
 
 /*
     Create audit table for CDC
