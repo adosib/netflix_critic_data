@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import aiohttp
 from bs4 import BeautifulSoup
-from common import HttpSessionHandler, configure_logger, save_response_body
+from common import NetflixSessionHandler, configure_logger, save_response_body
 from psycopg import Cursor, Connection, sql
 from tenacity import (
     retry,
@@ -92,9 +92,10 @@ def _retry_log(retry_state):
     before=_retry_log,
 )
 async def get_netflix(
-    netflix_id: int, request_url: str, session: aiohttp.ClientSession
+    netflix_id: int, request_path: str, session: aiohttp.ClientSession
 ) -> NetflixResponse:
-    async with session.get(request_url) as response:
+    async with session.get(request_path) as response:
+        request_url = session._base_url / request_path
         logger.info(f"Starting request for {request_url}")
         status = response.status
 
@@ -113,17 +114,17 @@ async def get_netflix(
         )
 
 
-async def run(netflix_id: int, session_handler: HttpSessionHandler, dbcur: Cursor):
+async def run(netflix_id: int, session_handler: NetflixSessionHandler, dbcur: Cursor):
     title_id = netflix_id
     responses: list[NetflixResponse] = []
     async with session_handler.limiter:
         for urlpath in ["title", "watch"]:  # <- order here really matters
             # Sometimes we can access /title even if it's not available, so to be doubly sure,
             # try to access /watch, too
-            request_url = f"https://www.netflix.com/{urlpath}/{title_id}"
+            request_path = f"{urlpath}/{title_id}"
             try:
-                session = await session_handler.choose_session(urlpath)
-                response = await get_netflix(title_id, request_url, session)
+                session = session_handler.choose_session(urlpath)
+                response = await get_netflix(title_id, request_path, session)
                 responses.append(response)
                 if not response.available:
                     # If /title isn't available, neither will be /watch, so don't bother
@@ -188,7 +189,7 @@ async def main():
                 {"country": COUNTRY_CODE},
             )
 
-            async with HttpSessionHandler(
+            async with NetflixSessionHandler(
                 headers={**HEADERS, **COOKIE}
             ) as session_handler:
                 for netflix_id, *_ in dbcur:
