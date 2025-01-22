@@ -155,7 +155,9 @@ class NetflixSessionHandler(HttpSessionHandler):
     ):
         # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
         # but I'll be nice and limit to 5 r/s
-        super().__init__(base_url, session_limit, max_rps)
+        super().__init__(
+            base_url=base_url, session_limit=session_limit, max_rps=max_rps
+        )
         self.noauth_session = self.start_session(**kwargs)
         self.authenticated_session = self.start_session(cookie_auth=True, **kwargs)
 
@@ -167,7 +169,7 @@ class NetflixSessionHandler(HttpSessionHandler):
 
 class BrightDataSessionHandler(HttpSessionHandler):
     def __init__(self, session_limit=10, max_rps=10, **kwargs):
-        super().__init__(session_limit, max_rps)
+        super().__init__(session_limit=session_limit, max_rps=max_rps)
         self._session_iterator = None
         for _ in range(session_limit):
             self.start_session(**kwargs)
