@@ -33,7 +33,7 @@ CREATE TABLE public.availability (
 CREATE TABLE public.ratings (
     id serial PRIMARY KEY,
     netflix_id integer REFERENCES titles (netflix_id) ON DELETE CASCADE,
-    vendor varchar(32),
+    vendor varchar(64),
     url text,
     rating smallint,
     ratings_count integer,
