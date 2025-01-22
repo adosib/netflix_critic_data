@@ -1,0 +1,33 @@
+services:
+
+  postgres:
+    image: postgres:latest
+    container_name: ncd-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - ./scripts/database_setup/db_setup.sql:/docker-entrypoint-initdb.d/db_setup.sql
+      - ./seeds:/seeds
+
+  app:
+    container_name: ncd-python
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - postgres
+    volumes:
+      - ./data:/netflix_critic_data/data
+      - ./scripts:/netflix_critic_data/scripts
+      - ./logs:/netflix_critic_data/logs
+    working_dir: /netflix_critic_data
+    environment:
+      NETFLIX_COOKIE: ${NETFLIX_COOKIE}
+      BRD_AUTH_TOKEN: ${BRD_AUTH_TOKEN}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      PGPASSWORD: password

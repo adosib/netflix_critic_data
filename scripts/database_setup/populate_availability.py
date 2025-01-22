@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import logging
 from pathlib import Path
@@ -7,7 +8,7 @@ from dataclasses import dataclass
 
 import aiohttp
 from bs4 import BeautifulSoup
-from common import HttpSessionHandler, configure_logger, save_response_body
+from common import NetflixSessionHandler, configure_logger, save_response_body
 from psycopg import Cursor, Connection, sql
 from tenacity import (
     retry,
@@ -16,7 +17,8 @@ from tenacity import (
     retry_if_exception_type,
 )
 
-THIS_DIR = Path(__file__).parent
+THIS_FILE = Path(__file__)
+THIS_DIR = THIS_FILE.parent
 ROOT_DIR, *_ = [
     parent for parent in THIS_DIR.parents if parent.stem == "netflix_critic_data"
 ]
@@ -57,7 +59,7 @@ async def update_database(cursor: Cursor, record: dict):
         "ON CONFLICT (netflix_id, country) DO UPDATE "
         "SET redirected_netflix_id = EXCLUDED.redirected_netflix_id, available = EXCLUDED.available, titlepage_reachable = EXCLUDED.titlepage_reachable, checked_at = EXCLUDED.checked_at"
     )
-    logger.info(f"Now executing: {upsert_availability_query.as_string()}")
+    logger.info(f"Now executing public.availability UPSERT with values: {record}")
     cursor.execute(upsert_availability_query, record)
 
 
@@ -76,8 +78,7 @@ async def response_indicates_available_title(response: aiohttp.ClientResponse):
 
 
 def _retry_log(retry_state):
-    logger.log(
-        logger.WARNING,
+    logger.warning(
         "Retrying %s(%s): attempt %s",
         retry_state.fn,
         retry_state.args,
@@ -92,9 +93,10 @@ def _retry_log(retry_state):
     before=_retry_log,
 )
 async def get_netflix(
-    netflix_id: int, request_url: str, session: aiohttp.ClientSession
+    netflix_id: int, request_path: str, session: aiohttp.ClientSession
 ) -> NetflixResponse:
-    async with session.get(request_url) as response:
+    async with session.get(request_path) as response:
+        request_url = session._base_url / request_path
         logger.info(f"Starting request for {request_url}")
         status = response.status
 
@@ -113,17 +115,17 @@ async def get_netflix(
         )
 
 
-async def run(netflix_id: int, session_handler: HttpSessionHandler, dbcur: Cursor):
+async def run(netflix_id: int, session_handler: NetflixSessionHandler, dbcur: Cursor):
     title_id = netflix_id
     responses: list[NetflixResponse] = []
     async with session_handler.limiter:
         for urlpath in ["title", "watch"]:  # <- order here really matters
             # Sometimes we can access /title even if it's not available, so to be doubly sure,
             # try to access /watch, too
-            request_url = f"https://www.netflix.com/{urlpath}/{title_id}"
+            request_path = f"{urlpath}/{title_id}"
             try:
-                session = await session_handler.choose_session(urlpath)
-                response = await get_netflix(title_id, request_url, session)
+                session = session_handler.choose_session(urlpath)
+                response = await get_netflix(title_id, request_path, session)
                 responses.append(response)
                 if not response.available:
                     # If /title isn't available, neither will be /watch, so don't bother
@@ -150,9 +152,7 @@ async def run(netflix_id: int, session_handler: HttpSessionHandler, dbcur: Curso
             if response.available:
                 titlepage_reachable = True
                 tg.create_task(
-                    await save_response_body(
-                        response.response_body, response.saveto_path
-                    )
+                    save_response_body(response.response_body, response.saveto_path)
                 )
 
             if response.redirected_netflix_id:
@@ -174,7 +174,7 @@ async def main():
     background_tasks = set()
     responses = []
 
-    with Connection.connect("dbname=postgres user=postgres", autocommit=True) as dbconn:
+    with Connection.connect(conn_string, autocommit=True) as dbconn:
         with dbconn.cursor() as dbcur:
             dbcur.execute(
                 """
@@ -184,13 +184,12 @@ async def main():
                     ON availability.netflix_id = titles.netflix_id
                     AND country = %(country)s
                 WHERE availability.netflix_id IS NULL 
-                   OR availability.checked_at + INTERVAL '7 days' < current_date
-                ;
+                   OR availability.checked_at + INTERVAL '7 days' < current_date;
                 """,
                 {"country": COUNTRY_CODE},
             )
 
-            async with HttpSessionHandler(
+            async with NetflixSessionHandler(
                 headers={**HEADERS, **COOKIE}
             ) as session_handler:
                 for netflix_id, *_ in dbcur:
@@ -228,15 +227,31 @@ if __name__ == "__main__":
         "sec-ch-ua-platform-version": '"15.1.0"',
     }
 
-    log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    log_file = (
+        LOG_DIR / f"{THIS_FILE.stem}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    )
     logger = logging.getLogger(__name__)
 
     file_handler = logging.FileHandler(log_file, mode="a+")
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
 
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+
     logger.addHandler(file_handler)
+    logger.addHandler(stdout_handler)
     logger.setLevel(logging.DEBUG)
     configure_logger(logger)
+
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    dbname = os.getenv("POSTGRES_DB", "postgres")
+    user = os.getenv("POSTGRES_USER", "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "")
+
+    conn_string = (
+        f"dbname={dbname} user={user} password={password} host={host} port={port}"
+    )
 
     asyncio.run(main(), debug=True)
