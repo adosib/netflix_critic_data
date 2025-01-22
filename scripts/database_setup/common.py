@@ -7,6 +7,7 @@ import warnings
 from typing import Any, NewType, Callable, Optional
 from pathlib import Path
 from datetime import datetime, timezone
+from itertools import cycle
 from collections import defaultdict
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -19,7 +20,7 @@ from bs4 import Tag, BeautifulSoup
 from aiolimiter import AsyncLimiter
 
 BRD_API_URL = "https://api.brightdata.com/request"
-BRD_ZONE = "serp_api1"
+BRD_ZONE = os.getenv("BRD_ZONE", "serp_api1")
 BRD_AUTH_TOKEN = os.getenv("BRD_AUTH_TOKEN")
 if BRD_AUTH_TOKEN is None:
     warnings.warn(
@@ -35,6 +36,10 @@ HTMLContent = NewType("HTML", str)
 
 
 class ContextExtractionError(Exception):
+    pass
+
+
+class SessionLimitError(Exception):
     pass
 
 
@@ -88,51 +93,104 @@ class JobStore:
 
 
 class HttpSessionHandler:
-    def __init__(self, **kwargs):
+    def __init__(self, base_url=None, session_limit=5, max_rps=5):
+        self.base_url = base_url
+        self.session_limit = session_limit
+        self.active_sessions = []
+        self.limiter = AsyncLimiter(1, 1.0 / max_rps)
+
+    def start_session(self, cookie_auth=False, **kwargs) -> aiohttp.ClientSession:
+        if len(self.active_sessions) >= self.session_limit:
+            raise SessionLimitError(
+                "The maximum allowable number of active sessions has been reached."
+            )
+
         concurrency_limit = kwargs.pop("concurrency_limit", 5)
-        connector = aiohttp.TCPConnector(
-            limit=concurrency_limit, limit_per_host=concurrency_limit
+        connector = kwargs.pop(
+            "connector",
+            aiohttp.TCPConnector(
+                limit=concurrency_limit, limit_per_host=concurrency_limit
+            ),
         )
-        headers = kwargs.pop("headers", {})
         # There's some weird timeout stuff that happens here
         # which necessitated the need for the ClientTimeout instance:
         # https://docs.aiohttp.org/en/stable/client_quickstart.html#aiohttp-client-timeouts
         # https://stackoverflow.com/questions/64534844/python-asyncio-aiohttp-timeout
         # https://github.com/aio-libs/aiohttp/issues/3203
-        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15)
-
-        # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
-        # but I'll be nice and limit to 5 r/s
-        self.limiter = AsyncLimiter(1, 1.0 / concurrency_limit)
-
-        self.active_sessions = []
-
-        self.noauth_session = aiohttp.ClientSession(
-            connector=connector, timeout=timeout, **kwargs
+        timeout = kwargs.pop(
+            "timeout", aiohttp.ClientTimeout(total=None, sock_connect=15)
         )
-        self.active_sessions.append(self.noauth_session)
 
-        if headers.get("Cookie", None):
-            self.authenticated_session = aiohttp.ClientSession(
-                connector=connector, timeout=timeout, headers=headers, **kwargs
-            )
-            self.active_sessions.append(self.authenticated_session)
+        headers = kwargs.pop("headers", {})
+        if not cookie_auth:
+            # If we're not authenticating with cookies, remove any present cookies
+            headers.pop("Cookie", None)
+
+        session = aiohttp.ClientSession(
+            self.base_url,
+            connector=connector,
+            headers=headers,
+            timeout=timeout,
+            **kwargs,
+        )
+
+        self.active_sessions.append(session)
+        return session
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
-        for session in self.active_sessions:
-            await session.close()
+        await self.close()
 
     async def close(self):
-        for session in self.active_sessions:
+        while self.active_sessions:
+            session = self.active_sessions.pop()
             await session.close()
 
-    async def choose_session(self, urlpath) -> aiohttp.ClientSession:
+
+class NetflixSessionHandler(HttpSessionHandler):
+    def __init__(
+        self, base_url="https://www.netflix.com/", session_limit=2, max_rps=5, **kwargs
+    ):
+        # <10 requests/second seems to be about what Netflix tolerates before forcefully terminating the session
+        # but I'll be nice and limit to 5 r/s
+        super().__init__(base_url, session_limit, max_rps)
+        self.noauth_session = self.start_session(**kwargs)
+        self.authenticated_session = self.start_session(cookie_auth=True, **kwargs)
+
+    def choose_session(self, urlpath) -> aiohttp.ClientSession:
         if "title" in urlpath:
             return self.noauth_session
         return self.authenticated_session
+
+
+class BrightDataSessionHandler(HttpSessionHandler):
+    def __init__(self, session_limit=10, max_rps=10, **kwargs):
+        super().__init__(session_limit, max_rps)
+        self._session_iterator = None
+        for _ in range(session_limit):
+            self.start_session(**kwargs)
+
+    def _update_session_iterator(self):
+        """Reinitialize the cycle iterator based on the updated active_sessions."""
+        self._session_iterator = cycle(self.active_sessions)
+
+    def start_session(self, cookie_auth=False, **kwargs):
+        session = super().start_session(cookie_auth, **kwargs)
+        self._update_session_iterator()
+        return session
+
+    def choose_session(self):
+        if not self.active_sessions:
+            raise ValueError("No active sessions available.")
+        if self._session_iterator is None:
+            self._update_session_iterator()
+        return next(self._session_iterator)
+
+    async def close(self):
+        await super().close()
+        self._update_session_iterator()
 
 
 class RatingPattern:
