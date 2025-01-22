@@ -17,7 +17,8 @@ from tenacity import (
     retry_if_exception_type,
 )
 
-THIS_DIR = Path(__file__).parent
+THIS_FILE = Path(__file__)
+THIS_DIR = THIS_FILE.parent
 ROOT_DIR, *_ = [
     parent for parent in THIS_DIR.parents if parent.stem == "netflix_critic_data"
 ]
@@ -183,8 +184,7 @@ async def main():
                     ON availability.netflix_id = titles.netflix_id
                     AND country = %(country)s
                 WHERE availability.netflix_id IS NULL 
-                   OR availability.checked_at + INTERVAL '7 days' < current_date
-                LIMIT 10;
+                   OR availability.checked_at + INTERVAL '7 days' < current_date;
                 """,
                 {"country": COUNTRY_CODE},
             )
@@ -227,7 +227,9 @@ if __name__ == "__main__":
         "sec-ch-ua-platform-version": '"15.1.0"',
     }
 
-    log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    log_file = (
+        LOG_DIR / f"{THIS_FILE.stem}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    )
     logger = logging.getLogger(__name__)
 
     file_handler = logging.FileHandler(log_file, mode="a+")

@@ -15,7 +15,8 @@ from common import (
 )
 from psycopg import Cursor, Connection, sql
 
-THIS_DIR = Path(__file__).parent
+THIS_FILE = Path(__file__)
+THIS_DIR = THIS_FILE.parent
 ROOT_DIR, *_ = [
     parent for parent in THIS_DIR.parents if parent.stem == "netflix_critic_data"
 ]
@@ -72,8 +73,7 @@ async def main():
                     ON availability.netflix_id = titles.netflix_id
                     AND availability.country = 'US'
                 WHERE availability.titlepage_reachable
-                  AND titles.metadata IS NULL
-                LIMIT 10;
+                  AND titles.metadata IS NULL;
             """)
             async with asyncio.TaskGroup() as tg:
                 for netflix_id, *_ in dbcur:
@@ -84,8 +84,9 @@ async def main():
 
 
 if __name__ == "__main__":
-    filename = Path(__file__).stem
-    log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    log_file = (
+        LOG_DIR / f"{THIS_FILE.stem}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+    )
     logger = logging.getLogger(__name__)
 
     file_handler = logging.FileHandler(log_file, mode="a+")
