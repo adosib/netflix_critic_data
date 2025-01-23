@@ -357,22 +357,22 @@ async def get_serp_html(
     ct_ratings = 0
 
     for url in _build_google_urls(queries):
-        # Kind of have to be sync about this... don't want to make more queries than necessary
-        async with session.post(
-            BRD_API_URL,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {BRD_AUTH_TOKEN}",
-            },
-            json={
-                "zone": BRD_ZONE,
-                "url": url,
-                "format": "raw",
-            },
-        ) as response:
-            json_body = await response.json()
-
         try:
+            # Kind of have to be sync about this... don't want to make more queries than necessary
+            async with session.post(
+                BRD_API_URL,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {BRD_AUTH_TOKEN}",
+                },
+                json={
+                    "zone": BRD_ZONE,
+                    "url": url,
+                    "format": "raw",
+                },
+            ) as response:
+                json_body = await response.json()
+
             html = json_body["html"]
             ratings = await extract_reviews_from_serp(netflix_id, html)
 
@@ -386,6 +386,9 @@ async def get_serp_html(
             for rating in ratings:
                 if rating.vendor == "Google users":
                     return SERPResponse(html, ratings)
+
+        except aiohttp.ConnectionTimeoutError:
+            break
 
         except json.JSONDecodeError as e:
             LOGGER.exception(e)
