@@ -371,7 +371,7 @@ async def get_serp_html(
                     "format": "raw",
                 },
             ) as response:
-                html = _get_html_from(response)
+                html = await _get_html_from(response)
 
             ratings = await extract_reviews_from_serp(netflix_id, html)
 
@@ -528,24 +528,6 @@ def _find_rating(text: str) -> Optional[int]:
 def configure_logger(external_logger):
     global LOGGER
     LOGGER = external_logger
-
-
-async def main():
-    netflix_id = 81578318
-    async with aiohttp.ClientSession() as httpsession:
-        with open(
-            f"/Users/asibalo/Documents/Dev/PetProjects/netflix_critic_data/data/raw/title/{netflix_id}.html"
-        ) as f:
-            html = f.read()
-            context = extract_netflix_react_context(html)
-            serp_response = await get_serp_html(
-                netflix_id,
-                get_field(context, "title"),
-                get_field(context, "content_type"),
-                get_field(context, "release_year"),
-                session=httpsession,
-            )
-            print(serp_response.ratings)
 
 
 if __name__ == "__main__":
