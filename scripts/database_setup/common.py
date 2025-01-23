@@ -371,9 +371,8 @@ async def get_serp_html(
                     "format": "raw",
                 },
             ) as response:
-                json_body = await response.json()
+                html = _get_html_from(response)
 
-            html = json_body["html"]
             ratings = await extract_reviews_from_serp(netflix_id, html)
 
             if (len_ := len(ratings)) > ct_ratings:
@@ -395,6 +394,15 @@ async def get_serp_html(
             continue
 
     return SERPResponse(html_content, ratings_list)
+
+
+async def _get_html_from(response: aiohttp.ClientResponse):
+    try:
+        json_body = await response.json()
+        html = json_body["html"]
+    except aiohttp.ContentTypeError:
+        html = await response.text()
+    return html
 
 
 def _build_query(
